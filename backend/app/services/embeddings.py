@@ -62,7 +62,14 @@ class VoyageEmbeddingService:
         clock: Callable[[], float] = time.monotonic,
     ) -> None:
         self.client = client
-        self.api_key = api_key if api_key is not None else settings.voyage_api_key
+        configured_api_key = settings.voyage_api_key
+        self.api_key = (
+            api_key
+            if api_key is not None
+            else configured_api_key.get_secret_value()
+            if configured_api_key is not None
+            else None
+        )
         self.model = model or settings.voyage_embedding_model
         self.dimensions = dimensions or settings.voyage_embedding_dimensions
         self.requests_per_minute = requests_per_minute or settings.voyage_requests_per_minute

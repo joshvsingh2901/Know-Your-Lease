@@ -1,6 +1,6 @@
 # Architecture
 
-Stage 4 is a browser application, a FastAPI service with in-process ingestion, local development file storage, Voyage AI embeddings, exact PostgreSQL + pgvector retrieval, Gemini grounded answer generation, verified citation snippets, and PDF source inspection. The Stage 1 upload boundary and Stage 2 indexing pipeline remain intact.
+The current system is a browser application, a FastAPI service with in-process ingestion, private local development file storage, Voyage AI embeddings, exact PostgreSQL + pgvector retrieval, Gemini grounded answer generation, verified citation snippets, answer reuse, and PDF source inspection. The original upload and indexing boundaries remain intact.
 
 ## Current system
 
@@ -36,6 +36,7 @@ Answer, compact citation cards, and PDF page navigation
 
 - `frontend/` owns file selection, upload feedback, polling, single-turn questions, a responsive side-by-side PDF viewer, answer display, and compact source cards. Citation interaction changes the viewer page and visibly selects the source card.
 - `backend/app/api/routes/documents.py` owns upload validation plus document-library, PDF, development-debug, and question contracts.
+- `backend/app/api/document_access.py` is the single route-level document access boundary. It currently exposes all local records; a future authenticated owner predicate belongs there.
 - `backend/app/services/storage.py` maps a document UUID to an internal `uploads/<uuid>.pdf` key. Original filenames are metadata only.
 - `backend/app/services/pdf_extraction.py`, `text_normalization.py`, and `chunking.py` form an inspectable preprocessing pipeline with no LLM or orchestration framework.
 - `backend/app/services/embeddings.py` batches document chunks, applies account-aware pacing and bounded transient retries, and validates Voyage output.
@@ -97,15 +98,15 @@ Repeated questions first check `grounded_answer_cache` using the document ID, wh
 
 ## Persistence and isolation
 
-The original PDF remains in `backend/storage/uploads/` for future source viewing. API responses never expose its internal path. Each chunk has a required foreign key to exactly one document, and the foreign key cascades on document deletion. Retrieval includes a `document_id` SQL filter before ranking and applies a second defensive scope check in orchestration; there is intentionally no global corpus search design.
+The original PDF remains in gitignored `backend/storage/uploads/` for future source viewing, outside frontend public assets. UUIDs generate storage keys; original filenames are display metadata only. Storage resolution rejects paths outside the uploads root, API responses never expose internal paths, and missing files return a fixed safe 404. Each chunk and cache row has a required foreign key to exactly one document with intentional delete cascade. Retrieval includes a `document_id` SQL filter before ranking and applies a second defensive scope check in orchestration; there is intentionally no global corpus search design.
 
-`GET /documents` is a lightweight local/single-user library of safe document metadata. The frontend can reopen a ready record without processing it again. Browser localStorage remembers only the active UUID and is not an access-control mechanism; authenticated ownership is deferred and must be enforced centrally before multi-user deployment.
+`GET /documents` is a lightweight local/single-user library of safe document metadata. The frontend can reopen a ready record without processing it again. Metadata, list, PDF, question, chunk, and retrieval routes all pass through the centralized route access boundary. Browser localStorage remembers only the active UUID and is not an access-control mechanism; production must add an authenticated owner/tenant predicate at that boundary before multi-user deployment. Internal scripts and services operate in a trusted local context and must receive an already-authorized document ID in a future multi-user system.
 
 The vector column has 1024 dimensions to match `voyage-law-2`. Conventional document/page indexes and a unique per-document chunk order support isolation and inspection. There is no ANN index: a normal lease contains few enough chunks that exact cosine distance is simpler and sufficiently fast.
 
 ## Grounding and citation boundary
 
-Gemini receives only the final retrieved excerpts, never the complete lease or PDF. The system instruction treats both the question and lease excerpts as untrusted data, forbids outside legal knowledge and legal advice, and requires supplied `SOURCE_n` identifiers. The provider response is validated against a strict JSON schema. Unknown identifiers reject the response; duplicate valid identifiers are deduplicated; and a response with no source IDs is replaced by the fixed abstention answer.
+Gemini receives only the final retrieved excerpts, never the complete lease or PDF. Trusted system instructions are separate from a JSON-encoded untrusted question/evidence payload. The system instruction treats both the question and lease excerpts as untrusted data, forbids following embedded commands, outside legal knowledge, and legal advice, and requires supplied `SOURCE_n` identifiers. The provider response is validated against a strict JSON schema. Unknown identifiers reject the response at both generation and orchestration boundaries; duplicate valid identifiers are deduplicated; and a response with no valid citations is replaced by the fixed abstention answer.
 
 Page numbers, section titles, snippets, similarity scores, and chunk IDs are mapped from retrieval results in backend code. A model-provided quote is used only after whitespace-normalized containment validation against its matching chunk. It never controls page metadata, and an invalid quote is replaced by a local relevant-sentence fallback.
 
@@ -117,6 +118,8 @@ FastAPI `BackgroundTasks` keeps the upload request responsive without adding Red
 
 ## Production boundaries and current limitations
 
-Known provider 429 and 5xx failures return safe structured errors distinct from missing or invalid configuration and unexpected provider failures. Debug chunk/retrieval endpoints are enabled by default only in development and are otherwise hidden unless explicitly enabled. CORS uses explicit origins, never a wildcard.
+Provider and database exceptions never flow directly into API responses. Known provider 429 and 5xx failures return safe structured errors distinct from missing or invalid configuration and unexpected provider failures. Logs retain document IDs, counts, timings, provider status/type/request IDs, and stack traces where useful, but omit API keys, raw provider bodies, prompts, and extracted lease text.
 
-The current system does not provide OCR, authentication/user ownership, durable background jobs, cross-process rate limiting, chat history, query rewriting, reranking, hybrid/full-text retrieval, coordinate-level PDF highlights, or a calibrated relevance threshold. Text-layer highlighting is best-effort because PDFs can expose text with imperfect spacing. Abstention relies on evidence-limited prompting plus strict source-ID validation. Production needs authenticated ownership, object storage, a durable queue, and cross-process rate coordination.
+Configuration masks database/provider secrets in settings representations. Startup validation keeps development key-optional, while production requires explicit database/provider settings, HTTPS non-loopback frontend origin, disabled debug endpoints, and storage outside `frontend/public`. CORS accepts validated explicit HTTP(S) origins only: configured local origins in development and only `FRONTEND_ORIGIN` outside development. Chunk/retrieval debug endpoints default on only in development and return 404 when disabled.
+
+The current system does not provide authentication/user ownership, encryption policy or managed object storage, OCR, durable background jobs, cross-process rate limiting, chat history, query rewriting, reranking, hybrid/full-text retrieval, coordinate-level PDF highlights, or a calibrated relevance threshold. Text-layer highlighting is best-effort because PDFs can expose text with imperfect spacing. Abstention relies on evidence-limited prompting plus strict source-ID validation, not a calibrated score cutoff or a second faithfulness model. It is not safe for multi-user exposure until authenticated ownership is added centrally.

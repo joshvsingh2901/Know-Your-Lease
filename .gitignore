@@ -15,6 +15,16 @@ htmlcov/
 .coverage
 /backend/storage/uploads/
 
+# Local/private documents, database exports, and key material
+*.pdf
+*.dump
+*.sql
+*.sqlite
+*.sqlite3
+*.db
+*.pem
+*.key
+
 # Node / Next.js
 node_modules/
 .next/

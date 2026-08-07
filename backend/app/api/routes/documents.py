@@ -19,6 +19,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from app.api.dependencies import get_db
+from app.api.document_access import AccessibleDocument, AccessibleDocuments
 from app.core.config import settings
 from app.models.document import Document, DocumentStatus
 from app.models.document_chunk import DocumentChunk
@@ -111,7 +112,11 @@ async def upload_document(
     try:
         storage_key = storage.save(document_id, file.file)
     except StorageError as exc:
-        raise HTTPException(status_code=500, detail=str(exc)) from exc
+        logger.warning("Could not store uploaded PDF for document %s", document_id)
+        raise HTTPException(
+            status_code=500,
+            detail="The uploaded PDF could not be stored. Please try again.",
+        ) from exc
 
     document = Document(
         id=document_id,
@@ -140,45 +145,36 @@ async def upload_document(
 
 @router.get("/documents/{document_id}", response_model=DocumentResponse)
 def get_document(
-    document_id: uuid.UUID,
-    db: Annotated[Session, Depends(get_db)],
+    document: AccessibleDocument,
 ) -> Document:
-    document = db.get(Document, document_id)
-    if document is None:
-        raise HTTPException(status_code=404, detail="Document not found.")
     return document
 
 
 @router.get("/documents", response_model=DocumentListResponse)
 def list_documents(
-    db: Annotated[Session, Depends(get_db)],
+    documents: AccessibleDocuments,
 ) -> DocumentListResponse:
-    documents = db.scalars(
-        select(Document).order_by(Document.updated_at.desc(), Document.id.desc())
-    ).all()
-    return DocumentListResponse(items=[DocumentResponse.model_validate(document) for document in documents])
+    return DocumentListResponse(
+        items=[DocumentResponse.model_validate(document) for document in documents]
+    )
 
 
 @router.get("/documents/{document_id}/pdf", response_class=FileResponse)
 def get_document_pdf(
-    document_id: uuid.UUID,
-    db: Annotated[Session, Depends(get_db)],
+    document: AccessibleDocument,
     storage: Annotated[DocumentStorage, Depends(get_document_storage)],
 ) -> FileResponse:
-    document = db.get(Document, document_id)
-    if document is None:
-        raise HTTPException(status_code=404, detail="Document not found.")
     if not document.storage_key:
         raise HTTPException(status_code=404, detail="Document PDF is unavailable.")
 
     try:
         pdf_path = storage.resolve(document.storage_key)
     except StorageError:
-        logger.warning("Invalid PDF storage key for document %s", document_id)
+        logger.warning("Invalid PDF storage key for document %s", document.id)
         raise HTTPException(status_code=404, detail="Document PDF is unavailable.") from None
 
     if not pdf_path.is_file():
-        logger.info("Stored PDF is unavailable for document %s", document_id)
+        logger.info("Stored PDF is unavailable for document %s", document.id)
         raise HTTPException(status_code=404, detail="Document PDF is unavailable.")
     return FileResponse(
         pdf_path,
@@ -192,23 +188,21 @@ def get_document_pdf(
     response_model=DocumentChunkListResponse,
 )
 def list_document_chunks(
-    document_id: uuid.UUID,
+    document: AccessibleDocument,
     db: Annotated[Session, Depends(get_db)],
     limit: Annotated[int, Query(ge=1, le=100)] = 50,
     offset: Annotated[int, Query(ge=0)] = 0,
 ) -> DocumentChunkListResponse:
     _require_debug_endpoints()
-    if db.get(Document, document_id) is None:
-        raise HTTPException(status_code=404, detail="Document not found.")
 
     total = db.scalar(
         select(func.count()).select_from(DocumentChunk).where(
-            DocumentChunk.document_id == document_id
+            DocumentChunk.document_id == document.id
         )
     )
     chunks = db.scalars(
         select(DocumentChunk)
-        .where(DocumentChunk.document_id == document_id)
+        .where(DocumentChunk.document_id == document.id)
         .order_by(DocumentChunk.chunk_index)
         .offset(offset)
         .limit(limit)
@@ -307,7 +301,7 @@ def _question_http_error(exc: Exception) -> HTTPException:
     response_model=RetrievalResponse,
 )
 def retrieve_document_evidence(
-    document_id: uuid.UUID,
+    document: AccessibleDocument,
     request: QuestionRequest,
     db: Annotated[Session, Depends(get_db)],
     question_service: Annotated[
@@ -317,7 +311,7 @@ def retrieve_document_evidence(
 ) -> RetrievalResponse:
     _require_debug_endpoints()
     try:
-        results = question_service.retrieve(db, document_id, request.question)
+        results = question_service.retrieve(db, document.id, request.question)
     except QUESTION_SERVICE_EXCEPTIONS as exc:
         raise _question_http_error(exc) from exc
     return RetrievalResponse(
@@ -340,7 +334,7 @@ def retrieve_document_evidence(
     response_model=QuestionResponse,
 )
 def ask_document_question(
-    document_id: uuid.UUID,
+    document: AccessibleDocument,
     request: QuestionRequest,
     db: Annotated[Session, Depends(get_db)],
     question_service: Annotated[
@@ -349,7 +343,7 @@ def ask_document_question(
     ],
 ) -> QuestionResponse:
     try:
-        result = question_service.answer_question(db, document_id, request.question)
+        result = question_service.answer_question(db, document.id, request.question)
     except QUESTION_SERVICE_EXCEPTIONS as exc:
         raise _question_http_error(exc) from exc
     return QuestionResponse(

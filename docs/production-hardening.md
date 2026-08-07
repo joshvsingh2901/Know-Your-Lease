@@ -4,7 +4,7 @@
 
 Documents are durable backend records. Uploading persists a UUID-owned PDF, its chunks, and a ready status; reopening a listed ready document, refreshing the browser, and asking later questions reuse those records without extraction or document embeddings. The browser stores only the active UUID in localStorage for convenience. It is not an authorization boundary.
 
-`GET /documents` is a deliberately small single-user/local library API. It returns safe metadata only and the frontend presents ready documents as compact reopen buttons beside upload. A future authenticated deployment must add an owner/tenant scope and enforce it centrally across list, metadata, PDF, question, cache, and debug routes. No fake ownership field or localStorage-based access control exists today.
+`GET /documents` is a deliberately small single-user/local library API. It returns safe metadata only and the frontend presents ready documents as compact reopen buttons beside upload. `backend/app/api/document_access.py` is the shared access seam used by list, metadata, PDF, question, cache entry points, chunks, and retrieval routes. It intentionally exposes all documents locally. A future authenticated deployment must add the current principal and an owner/tenant predicate there; no fake ownership field or localStorage-based access control exists today.
 
 ## Answer reuse
 
@@ -16,8 +16,26 @@ Question failures use safe structured API errors. A known 429 returns `provider_
 
 Chunk inspection and retrieval diagnostics are enabled by default only when `ENVIRONMENT=development`. Set `DEBUG_ENDPOINTS_ENABLED=true` deliberately for a non-development diagnostic environment; otherwise `/chunks` and `/retrieve` return 404. Normal document metadata, PDF, and question routes remain document-scoped.
 
-## Privacy and remaining production work
+## File and storage privacy
 
-PDFs remain outside frontend public assets under generated UUID storage keys. Filenames are metadata only, uploads require a PDF extension/content type/signature and obey the configured size cap, and unavailable files return a safe 404 without storage paths. Extraction and provider logs avoid lease contents.
+PDF uploads require a sanitized `.pdf` display filename, accepted PDF media type, `%PDF-` signature, and configured size limit before persistence. Storage ignores the display filename and atomically writes `backend/storage/uploads/<document-uuid>.pdf`; path resolution cannot leave the uploads root. The uploads directory and PDF/database/key artifacts are gitignored, and the audit found none tracked. PDFs never enter frontend public assets, internal storage keys are absent from response schemas, and missing or invalid files return a fixed response without filesystem details. Extraction logs contain document IDs, page/chunk counts, and status—not lease text.
 
-There is still no authentication, durable job queue, cross-process rate coordination, object storage, OCR, or deployment configuration. Production must set a real `FRONTEND_ORIGIN`; CORS never uses a wildcard. It must also provide authenticated ownership and protect all document routes before exposing this application to multiple users.
+## Grounding and prompt injection
+
+Gemini's system instruction is separate from the JSON-encoded user question and retrieved lease excerpts. Both are explicitly untrusted data: embedded commands cannot override the task, outside legal knowledge is prohibited, and only supplied evidence may support an answer. Structured output is schema-validated; source IDs are checked twice against retrieved evidence; page/chunk metadata is backend-owned; quotes require source-text containment; malformed output fails safely; and source-less output becomes a fixed abstention. No second LLM or moderation call was added.
+
+## Configuration, CORS, and logs
+
+Database and provider credentials use masked secret settings and are unwrapped only at their client boundaries. `.env` files are gitignored and `.env.example` contains development/example or blank values. Development remains key-optional so mocked tests and non-provider routes work normally. Production startup requires an explicit database URL, both provider keys, an HTTPS non-loopback `FRONTEND_ORIGIN`, disabled debug endpoints, and storage outside `frontend/public`; error messages name settings without echoing values.
+
+CORS never accepts a wildcard or origins containing credentials, paths, queries, or fragments. Development allows the primary `http://localhost:3000` plus explicit local fallback origins. Non-development environments ignore the fallback list and allow only `FRONTEND_ORIGIN`.
+
+API responses use fixed errors for storage, database, provider, and unexpected failures; raw provider payloads, filesystem paths, stack traces, and secrets are not returned. Server logs retain document IDs, counts, timings, safe provider status/type/request IDs, and exception traces where needed, while avoiding API keys, prompts, full questions, and lease text.
+
+## Database and cache safety
+
+Chunks and grounded-answer cache rows have required document foreign keys with intentional database and ORM delete cascades. Retrieval, orchestration, cache lookup, cache validation, and re-index invalidation all include `document_id`. Cache reads revalidate cited chunk ownership; cache hits cannot cross documents; re-indexing deletes old answers for that document; and no destructive cleanup endpoint was added. Stage 6B requires no schema migration and preserves existing document/chunk/cache data.
+
+## Remaining production work
+
+There is still no authentication, owner/tenant data model, managed object storage or explicit encryption/retention policy, durable job queue, cross-process rate coordination, OCR, malware scanning, backup/restore policy, or deployment infrastructure. Prompt controls reduce injection risk but cannot prove semantic faithfulness, and abstention has no calibrated relevance threshold. The application must not be exposed as a multi-user service until authenticated document ownership is implemented at the central access boundary.

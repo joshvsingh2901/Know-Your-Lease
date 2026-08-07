@@ -2,14 +2,23 @@ import uuid
 from pathlib import Path
 
 import pytest
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
-from sqlalchemy import select
+from sqlalchemy import func, select
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
+from app.api.document_access import (
+    get_accessible_document,
+    list_accessible_documents,
+)
+from app.core.config import settings
 from app.main import app
+from app.models.answer_cache import GroundedAnswerCache
 from app.models.document import Document, DocumentStatus
 from app.models.document_chunk import DocumentChunk
 from app.services.document_ingestion import get_ingestion_service
+from app.services.storage import StorageError
 
 
 def test_valid_pdf_upload_creates_document(
@@ -56,6 +65,78 @@ def test_spoofed_pdf_is_rejected(client: TestClient, db_session: Session) -> Non
 
     assert response.status_code == 415
     assert db_session.scalar(select(Document)) is None
+
+
+def test_pdf_mime_type_is_enforced(client: TestClient, db_session: Session) -> None:
+    response = client.post(
+        "/documents",
+        files={"file": ("lease.pdf", b"%PDF-1.4\n%%EOF", "text/plain")},
+    )
+
+    assert response.status_code == 415
+    assert db_session.scalar(select(Document)) is None
+
+
+def test_upload_size_limit_is_enforced(
+    client: TestClient,
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(settings, "max_upload_size_mb", 0)
+
+    response = client.post(
+        "/documents",
+        files={"file": ("lease.pdf", b"%PDF-1.4\n%%EOF", "application/pdf")},
+    )
+
+    assert response.status_code == 413
+    assert db_session.scalar(select(Document)) is None
+
+
+def test_storage_failure_does_not_expose_internal_path(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    ingestion = app.dependency_overrides[get_ingestion_service]()
+
+    def fail_storage(*args, **kwargs):
+        del args, kwargs
+        raise StorageError("failed at /private/storage/uploads/secret.pdf")
+
+    monkeypatch.setattr(ingestion.storage, "save", fail_storage)
+
+    response = client.post(
+        "/documents",
+        files={"file": ("lease.pdf", b"%PDF-1.4\n%%EOF", "application/pdf")},
+    )
+
+    assert response.status_code == 500
+    assert response.json() == {
+        "detail": "The uploaded PDF could not be stored. Please try again."
+    }
+    assert "/private/storage" not in response.text
+
+
+def test_database_failure_does_not_expose_internal_detail(
+    client: TestClient,
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fail_commit() -> None:
+        raise SQLAlchemyError("private database host and schema detail")
+
+    monkeypatch.setattr(db_session, "commit", fail_commit)
+
+    response = client.post(
+        "/documents",
+        files={"file": ("lease.pdf", b"%PDF-1.4\n%%EOF", "application/pdf")},
+    )
+
+    assert response.status_code == 503
+    assert response.json() == {
+        "detail": "The document could not be recorded. Please try again."
+    }
+    assert "private database" not in response.text
 
 
 def test_original_filename_is_sanitized(client: TestClient, db_session: Session) -> None:
@@ -126,6 +207,59 @@ def test_document_library_lists_only_safe_document_metadata(
     items = response.json()["items"]
     assert {item["filename"] for item in items} == {"first.pdf", "second.pdf"}
     assert all("storage_key" not in item for item in items)
+
+
+def test_document_list_uses_central_access_boundary(
+    client: TestClient,
+    db_session: Session,
+) -> None:
+    visible = Document(original_filename="visible.pdf", status=DocumentStatus.READY)
+    hidden = Document(original_filename="hidden.pdf", status=DocumentStatus.READY)
+    db_session.add_all([visible, hidden])
+    db_session.commit()
+    app.dependency_overrides[list_accessible_documents] = lambda: [visible]
+
+    response = client.get("/documents")
+
+    assert response.status_code == 200
+    assert [item["id"] for item in response.json()["items"]] == [str(visible.id)]
+    assert "hidden.pdf" not in response.text
+
+
+@pytest.mark.parametrize(
+    ("method", "suffix", "json_body"),
+    [
+        ("GET", "", None),
+        ("GET", "/pdf", None),
+        ("GET", "/chunks", None),
+        ("POST", "/retrieve", {"question": "Can I have pets?"}),
+        ("POST", "/questions", {"question": "Can I have pets?"}),
+    ],
+)
+def test_all_document_routes_use_central_access_boundary(
+    client: TestClient,
+    db_session: Session,
+    method: str,
+    suffix: str,
+    json_body: dict[str, str] | None,
+) -> None:
+    document = Document(original_filename="private.pdf", status=DocumentStatus.READY)
+    db_session.add(document)
+    db_session.commit()
+
+    def deny_document_access() -> None:
+        raise HTTPException(status_code=404, detail="Document not found.")
+
+    app.dependency_overrides[get_accessible_document] = deny_document_access
+
+    response = client.request(
+        method,
+        f"/documents/{document.id}{suffix}",
+        json=json_body,
+    )
+
+    assert response.status_code == 404
+    assert response.json() == {"detail": "Document not found."}
 
 
 def test_listing_ready_document_for_reopen_does_not_schedule_ingestion(
@@ -220,3 +354,35 @@ def test_nonexistent_document_pdf_returns_not_found(client: TestClient) -> None:
 
     assert response.status_code == 404
     assert response.json() == {"detail": "Document not found."}
+
+
+def test_deleting_document_cascades_chunks_and_answer_cache(db_session: Session) -> None:
+    document = Document(original_filename="lease.pdf", status=DocumentStatus.READY)
+    db_session.add(document)
+    db_session.flush()
+    chunk = DocumentChunk(
+        document_id=document.id,
+        chunk_index=0,
+        text="The tenant may keep one cat.",
+        page_number=1,
+        token_count=7,
+        embedding=[0.25] * 1024,
+    )
+    db_session.add(chunk)
+    db_session.flush()
+    db_session.add(
+        GroundedAnswerCache(
+            document_id=document.id,
+            normalized_question="can i have pets?",
+            generation_version="v1",
+            answer="Yes, subject to the lease conditions.",
+            citations=[{"chunk_id": str(chunk.id)}],
+        )
+    )
+    db_session.commit()
+
+    db_session.delete(document)
+    db_session.commit()
+
+    assert db_session.scalar(select(func.count()).select_from(DocumentChunk)) == 0
+    assert db_session.scalar(select(func.count()).select_from(GroundedAnswerCache)) == 0

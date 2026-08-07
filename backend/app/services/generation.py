@@ -107,7 +107,14 @@ class GeminiGenerationService:
         clock: Callable[[], float] = time.monotonic,
     ) -> None:
         self.client = client
-        self.api_key = api_key if api_key is not None else settings.gemini_api_key
+        configured_api_key = settings.gemini_api_key
+        self.api_key = (
+            api_key
+            if api_key is not None
+            else configured_api_key.get_secret_value()
+            if configured_api_key is not None
+            else None
+        )
         self.model = model or settings.gemini_model
         self.max_output_tokens = (
             max_output_tokens or settings.gemini_max_output_tokens

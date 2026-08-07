@@ -12,8 +12,10 @@ from app.services.answer_cache import AnswerCacheService, CachedCitation
 from app.services.citation_snippets import build_citation_snippet
 from app.services.embeddings import VoyageEmbeddingService, get_embedding_service
 from app.services.generation import (
+    ABSTENTION_ANSWER,
     GeminiGenerationService,
     GenerationEvidence,
+    GenerationResponseError,
     get_generation_service,
 )
 from app.services.retrieval import RetrievalResult, RetrievalService
@@ -159,6 +161,11 @@ class QuestionAnsweringService:
             document_id,
             time.perf_counter() - generation_started,
         )
+        unknown_source_ids = set(generated.source_ids) - set(source_map)
+        if unknown_source_ids:
+            raise GenerationResponseError(
+                "Generation returned unsupported evidence references."
+            )
 
         citations: list[AnswerCitation] = []
         cited_source_ids: set[str] = set()
@@ -184,7 +191,10 @@ class QuestionAnsweringService:
                     score=result.score,
                 )
             )
-        answer = QuestionAnswer(answer=generated.answer, citations=citations)
+        answer = QuestionAnswer(
+            answer=generated.answer if citations else ABSTENTION_ANSWER,
+            citations=citations,
+        )
         self.answer_cache.store(
             db,
             document_id,
