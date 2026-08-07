@@ -9,6 +9,7 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.core.database import Base
 
 if TYPE_CHECKING:
+    from app.models.answer_cache import GroundedAnswerCache
     from app.models.document_chunk import DocumentChunk
 
 
@@ -42,5 +43,8 @@ class Document(Base):
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
     )
     chunks: Mapped[list["DocumentChunk"]] = relationship(
+        back_populates="document", cascade="all, delete-orphan"
+    )
+    answer_cache_entries: Mapped[list["GroundedAnswerCache"]] = relationship(
         back_populates="document", cascade="all, delete-orphan"
     )

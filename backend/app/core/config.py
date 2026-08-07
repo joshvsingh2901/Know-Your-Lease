@@ -10,6 +10,7 @@ BACKEND_DIR = Path(__file__).resolve().parents[2]
 class Settings(BaseSettings):
     app_name: str = "Know Your Lease API"
     environment: str = "development"
+    debug_endpoints_enabled: bool | None = None
     database_url: str = (
         "postgresql+psycopg://lease_user:lease_password@localhost:5433/know_your_lease"
     )
@@ -41,6 +42,7 @@ class Settings(BaseSettings):
     gemini_thinking_level: str = "low"
     gemini_max_retries: int = 1
     gemini_retry_base_seconds: float = 2.0
+    answer_cache_version: str = "v1"
 
     model_config = SettingsConfigDict(
         env_file=BACKEND_DIR / ".env",
@@ -64,6 +66,13 @@ class Settings(BaseSettings):
                 if origin.strip()
             )
         return list(dict.fromkeys(origins))
+
+    @computed_field
+    @property
+    def debug_endpoints_allowed(self) -> bool:
+        if self.debug_endpoints_enabled is not None:
+            return self.debug_endpoints_enabled
+        return self.environment == "development"
 
 
 @lru_cache

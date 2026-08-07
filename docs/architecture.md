@@ -35,7 +35,7 @@ Answer, compact citation cards, and PDF page navigation
 ```
 
 - `frontend/` owns file selection, upload feedback, polling, single-turn questions, a responsive side-by-side PDF viewer, answer display, and compact source cards. Citation interaction changes the viewer page and visibly selects the source card.
-- `backend/app/api/routes/documents.py` owns upload validation and the document, PDF, retrieval-debug, and question contracts.
+- `backend/app/api/routes/documents.py` owns upload validation plus document-library, PDF, development-debug, and question contracts.
 - `backend/app/services/storage.py` maps a document UUID to an internal `uploads/<uuid>.pdf` key. Original filenames are metadata only.
 - `backend/app/services/pdf_extraction.py`, `text_normalization.py`, and `chunking.py` form an inspectable preprocessing pipeline with no LLM or orchestration framework.
 - `backend/app/services/embeddings.py` batches document chunks, applies account-aware pacing and bounded transient retries, and validates Voyage output.
@@ -45,6 +45,7 @@ Answer, compact citation cards, and PDF page navigation
 - `backend/app/services/citation_snippets.py` validates model quotes against source chunks and provides bounded sentence-aware fallback snippets plus conservative heading detection.
 - `backend/app/services/question_answering.py` requires a ready document, coordinates query embedding, retrieval, generation, verified snippets, and backend citation mapping.
 - `backend/app/models/` contains `Document` and document-owned `DocumentChunk` records.
+- `grounded_answer_cache` stores document-scoped, versioned, verified final answers for exact normalized question reuse.
 - `backend/alembic/` is the only production schema mechanism; application startup does not create tables.
 
 ## Request and processing lifecycle
@@ -92,9 +93,13 @@ Return answer and citations
 
 `POST /documents/{document_id}/retrieve` runs the same ready check, query embedding, exact search, and diversification but skips Gemini. It is a development diagnostic for separating retrieval quality from generation quality. Neither endpoint returns vector arrays.
 
+Repeated questions first check `grounded_answer_cache` using the document ID, whitespace/case-normalized exact question, and a cache version. A hit returns the already verified answer/citations without calling Voyage or Gemini; only a successful non-abstaining response with verified citations is stored.
+
 ## Persistence and isolation
 
 The original PDF remains in `backend/storage/uploads/` for future source viewing. API responses never expose its internal path. Each chunk has a required foreign key to exactly one document, and the foreign key cascades on document deletion. Retrieval includes a `document_id` SQL filter before ranking and applies a second defensive scope check in orchestration; there is intentionally no global corpus search design.
+
+`GET /documents` is a lightweight local/single-user library of safe document metadata. The frontend can reopen a ready record without processing it again. Browser localStorage remembers only the active UUID and is not an access-control mechanism; authenticated ownership is deferred and must be enforced centrally before multi-user deployment.
 
 The vector column has 1024 dimensions to match `voyage-law-2`. Conventional document/page indexes and a unique per-document chunk order support isolation and inspection. There is no ANN index: a normal lease contains few enough chunks that exact cosine distance is simpler and sufficiently fast.
 
@@ -110,6 +115,8 @@ Page numbers, section titles, snippets, similarity scores, and chunk IDs are map
 
 FastAPI `BackgroundTasks` keeps the upload request responsive without adding Redis or a worker service. The embedding service is process-local and serializes provider calls so its 3 RPM / 10K TPM pacing applies across uploads handled by that process. This is an MVP execution model: a production deployment should move ingestion to a durable queue because in-flight work is lost if the API process restarts, and rate limiting would need coordination across multiple API processes.
 
-## Current limitations
+## Production boundaries and current limitations
 
-The current system does not provide OCR, authentication/user ownership, durable background jobs, cross-process rate limiting, chat history, query rewriting, reranking, hybrid/full-text retrieval, coordinate-level PDF highlights, or a calibrated relevance threshold. Text-layer highlighting is best-effort because PDFs can expose text with imperfect spacing. Abstention relies on evidence-limited prompting plus strict source-ID validation. The chunks and retrieval endpoints are development inspection surfaces and should be restricted before a production deployment.
+Known provider 429 and 5xx failures return safe structured errors distinct from missing or invalid configuration and unexpected provider failures. Debug chunk/retrieval endpoints are enabled by default only in development and are otherwise hidden unless explicitly enabled. CORS uses explicit origins, never a wildcard.
+
+The current system does not provide OCR, authentication/user ownership, durable background jobs, cross-process rate limiting, chat history, query rewriting, reranking, hybrid/full-text retrieval, coordinate-level PDF highlights, or a calibrated relevance threshold. Text-layer highlighting is best-effort because PDFs can expose text with imperfect spacing. Abstention relies on evidence-limited prompting plus strict source-ID validation. Production needs authenticated ownership, object storage, a durable queue, and cross-process rate coordination.

@@ -7,7 +7,7 @@ export function getDocumentPdfUrl(documentId: string): string {
 }
 
 export class ApiError extends Error {
-  constructor(message: string, public readonly status?: number) {
+  constructor(message: string, public readonly status?: number, public readonly code?: string) {
     super(message);
     this.name = "ApiError";
   }
@@ -16,9 +16,12 @@ export class ApiError extends Error {
 async function getErrorMessage(response: Response, fallback: string): Promise<string> {
   try {
     const error = (await response.json()) as {
-      detail?: string | Array<{ msg?: string }>;
+      detail?: string | Array<{ msg?: string }> | { message?: string };
     };
     if (typeof error.detail === "string") return error.detail;
+    if (error.detail && typeof error.detail === "object" && "message" in error.detail) {
+      return typeof error.detail.message === "string" ? error.detail.message : fallback;
+    }
     if (Array.isArray(error.detail)) {
       const details = error.detail.flatMap((item) => (item.msg ? [item.msg] : []));
       if (details.length) return details.join(" ");
@@ -27,6 +30,20 @@ async function getErrorMessage(response: Response, fallback: string): Promise<st
     // The API did not return JSON, so keep the safe user-facing fallback.
   }
   return fallback;
+}
+
+export async function listDocuments(): Promise<UploadedDocument[]> {
+  let response: Response;
+  try {
+    response = await fetch(`${API_BASE_URL}/documents`, { cache: "no-store" });
+  } catch {
+    throw new ApiError("Saved documents could not be loaded. Check that the backend is running.");
+  }
+  if (!response.ok) {
+    throw new ApiError(await getErrorMessage(response, "Saved documents could not be loaded."), response.status);
+  }
+  const body = (await response.json()) as { items: UploadedDocument[] };
+  return body.items;
 }
 
 export async function uploadDocument(file: File): Promise<UploadedDocument> {

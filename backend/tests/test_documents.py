@@ -1,12 +1,15 @@
 import uuid
 from pathlib import Path
 
+import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.main import app
 from app.models.document import Document, DocumentStatus
 from app.models.document_chunk import DocumentChunk
+from app.services.document_ingestion import get_ingestion_service
 
 
 def test_valid_pdf_upload_creates_document(
@@ -106,6 +109,55 @@ def test_get_document_and_paginated_chunks_exclude_embeddings(
     assert body["items"][0]["chunk_index"] == 1
     assert body["items"][0]["page_number"] == 2
     assert "embedding" not in body["items"][0]
+
+
+def test_document_library_lists_only_safe_document_metadata(
+    client: TestClient,
+    db_session: Session,
+) -> None:
+    first = Document(original_filename="first.pdf", storage_key="uploads/private.pdf")
+    second = Document(original_filename="second.pdf", status=DocumentStatus.READY)
+    db_session.add_all([first, second])
+    db_session.commit()
+
+    response = client.get("/documents")
+
+    assert response.status_code == 200
+    items = response.json()["items"]
+    assert {item["filename"] for item in items} == {"first.pdf", "second.pdf"}
+    assert all("storage_key" not in item for item in items)
+
+
+def test_listing_ready_document_for_reopen_does_not_schedule_ingestion(
+    client: TestClient,
+    db_session: Session,
+) -> None:
+    document = Document(original_filename="ready.pdf", status=DocumentStatus.READY)
+    db_session.add(document)
+    db_session.commit()
+    ingestion = app.dependency_overrides[get_ingestion_service]()
+
+    response = client.get("/documents")
+
+    assert response.status_code == 200
+    assert response.json()["items"][0]["id"] == str(document.id)
+    assert ingestion.requested_documents == []
+
+
+def test_debug_chunks_endpoint_is_hidden_when_disabled(
+    client: TestClient,
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    document = Document(original_filename="lease.pdf", status=DocumentStatus.READY)
+    db_session.add(document)
+    db_session.commit()
+    monkeypatch.setattr("app.api.routes.documents.settings.debug_endpoints_enabled", False)
+
+    response = client.get(f"/documents/{document.id}/chunks")
+
+    assert response.status_code == 404
+    assert response.json() == {"detail": "Not found."}
 
 
 def test_missing_document_returns_not_found(client: TestClient) -> None:

@@ -25,6 +25,7 @@ from app.models.document_chunk import DocumentChunk
 from app.schemas.document import (
     DocumentChunkListResponse,
     DocumentChunkResponse,
+    DocumentListResponse,
     DocumentResponse,
 )
 from app.schemas.question import (
@@ -148,6 +149,16 @@ def get_document(
     return document
 
 
+@router.get("/documents", response_model=DocumentListResponse)
+def list_documents(
+    db: Annotated[Session, Depends(get_db)],
+) -> DocumentListResponse:
+    documents = db.scalars(
+        select(Document).order_by(Document.updated_at.desc(), Document.id.desc())
+    ).all()
+    return DocumentListResponse(items=[DocumentResponse.model_validate(document) for document in documents])
+
+
 @router.get("/documents/{document_id}/pdf", response_class=FileResponse)
 def get_document_pdf(
     document_id: uuid.UUID,
@@ -186,6 +197,7 @@ def list_document_chunks(
     limit: Annotated[int, Query(ge=1, le=100)] = 50,
     offset: Annotated[int, Query(ge=0)] = 0,
 ) -> DocumentChunkListResponse:
+    _require_debug_endpoints()
     if db.get(Document, document_id) is None:
         raise HTTPException(status_code=404, detail="Document not found.")
 
@@ -209,6 +221,31 @@ def list_document_chunks(
     )
 
 
+def _require_debug_endpoints() -> None:
+    if not settings.debug_endpoints_allowed:
+        raise HTTPException(status_code=404, detail="Not found.")
+
+
+def _safe_error(status_code: int, code: str, message: str) -> HTTPException:
+    return HTTPException(status_code=status_code, detail={"code": code, "message": message})
+
+
+def _provider_status(exc: Exception) -> int | None:
+    current: BaseException | None = exc
+    seen: set[int] = set()
+    while isinstance(current, BaseException) and id(current) not in seen:
+        seen.add(id(current))
+        for attribute in ("http_status", "status_code", "status", "code"):
+            value = getattr(current, attribute, None)
+            try:
+                if value is not None:
+                    return int(value)
+            except (TypeError, ValueError):
+                continue
+        current = current.__cause__
+    return None
+
+
 def _question_http_error(exc: Exception) -> HTTPException:
     if isinstance(exc, DocumentNotFoundError):
         return HTTPException(status_code=404, detail="Document not found.")
@@ -224,9 +261,10 @@ def _question_http_error(exc: Exception) -> HTTPException:
             detail="This document has no indexed evidence available.",
         )
     if isinstance(exc, (EmbeddingConfigurationError, GenerationConfigurationError)):
-        return HTTPException(
-            status_code=503,
-            detail="Question answering is not configured on the server.",
+        return _safe_error(
+            503,
+            "provider_configuration",
+            "Question answering is not configured on the server.",
         )
     if isinstance(
         exc,
@@ -237,11 +275,31 @@ def _question_http_error(exc: Exception) -> HTTPException:
             GenerationResponseError,
         ),
     ):
-        return HTTPException(
-            status_code=502,
-            detail="The question service could not complete this request. Please try again.",
+        provider_status = _provider_status(exc)
+        if provider_status in {400, 401, 403, 404}:
+            return _safe_error(
+                503,
+                "provider_configuration",
+                "Question answering is not configured correctly on the server.",
+            )
+        if provider_status == 429:
+            return _safe_error(
+                429,
+                "provider_rate_limited",
+                "The answer service is temporarily rate-limited. Please try again shortly.",
+            )
+        if provider_status is not None and 500 <= provider_status <= 599:
+            return _safe_error(
+                503,
+                "provider_temporarily_unavailable",
+                "The answer service is temporarily unavailable. Please try again.",
+            )
+        return _safe_error(
+            502,
+            "provider_request_failed",
+            "The answer service could not complete this request. Please try again.",
         )
-    return HTTPException(status_code=500, detail="Question answering failed unexpectedly.")
+    return _safe_error(500, "question_unexpected_error", "Question answering failed unexpectedly.")
 
 
 @router.post(
@@ -257,6 +315,7 @@ def retrieve_document_evidence(
         Depends(get_question_answering_service),
     ],
 ) -> RetrievalResponse:
+    _require_debug_endpoints()
     try:
         results = question_service.retrieve(db, document_id, request.question)
     except QUESTION_SERVICE_EXCEPTIONS as exc:

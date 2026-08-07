@@ -17,6 +17,10 @@ class DocumentResponse(BaseModel):
     error_message: str | None
 
 
+class DocumentListResponse(BaseModel):
+    items: list[DocumentResponse]
+
+
 class DocumentChunkResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 

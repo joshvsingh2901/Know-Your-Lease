@@ -6,8 +6,11 @@ from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
 from app.main import app
+from app.models.answer_cache import GroundedAnswerCache
 from app.models.document import Document, DocumentStatus
+from app.models.document_chunk import DocumentChunk
 from app.services.generation import (
+    GenerationConfigurationError,
     GenerationEvidence,
     GenerationProviderError,
     GroundedGenerationResult,
@@ -248,9 +251,13 @@ def test_generation_provider_failure_returns_only_safe_api_error(
 ) -> None:
     document = _document(db_session, DocumentStatus.READY)
     provider_detail = "internal provider request abc-123 failed"
+    provider_error = GenerationProviderError(provider_detail)
+    upstream_error = RuntimeError(provider_detail)
+    upstream_error.status_code = 429
+    provider_error.__cause__ = upstream_error
     _override_question_service(
         results=[_result(document.id)],
-        generation_error=GenerationProviderError(provider_detail),
+        generation_error=provider_error,
     )
 
     response = client.post(
@@ -258,11 +265,250 @@ def test_generation_provider_failure_returns_only_safe_api_error(
         json={"question": "When can the landlord enter?"},
     )
 
-    assert response.status_code == 502
+    assert response.status_code == 429
     assert response.json() == {
-        "detail": "The question service could not complete this request. Please try again."
+        "detail": {
+            "code": "provider_rate_limited",
+            "message": "The answer service is temporarily rate-limited. Please try again shortly.",
+        }
     }
     assert provider_detail not in response.text
+
+
+def test_provider_outage_is_classified_safely(
+    client: TestClient,
+    db_session: Session,
+) -> None:
+    document = _document(db_session, DocumentStatus.READY)
+    provider_error = GenerationProviderError("provider payload")
+    upstream_error = RuntimeError("provider payload")
+    upstream_error.status_code = 503
+    provider_error.__cause__ = upstream_error
+    _override_question_service(results=[_result(document.id)], generation_error=provider_error)
+
+    response = client.post(
+        f"/documents/{document.id}/questions",
+        json={"question": "When can the landlord enter?"},
+    )
+
+    assert response.status_code == 503
+    assert response.json() == {
+        "detail": {
+            "code": "provider_temporarily_unavailable",
+            "message": "The answer service is temporarily unavailable. Please try again.",
+        }
+    }
+
+
+def test_provider_configuration_error_is_classified_safely(
+    client: TestClient,
+    db_session: Session,
+) -> None:
+    document = _document(db_session, DocumentStatus.READY)
+    _override_question_service(
+        results=[_result(document.id)],
+        generation_error=GenerationConfigurationError("missing secret"),
+    )
+
+    response = client.post(
+        f"/documents/{document.id}/questions",
+        json={"question": "When can the landlord enter?"},
+    )
+
+    assert response.status_code == 503
+    assert response.json() == {
+        "detail": {
+            "code": "provider_configuration",
+            "message": "Question answering is not configured on the server.",
+        }
+    }
+
+
+def test_invalid_provider_configuration_is_classified_safely(
+    client: TestClient,
+    db_session: Session,
+) -> None:
+    document = _document(db_session, DocumentStatus.READY)
+    provider_error = GenerationProviderError("provider authentication payload")
+    upstream_error = RuntimeError("provider authentication payload")
+    upstream_error.status_code = 401
+    provider_error.__cause__ = upstream_error
+    _override_question_service(results=[_result(document.id)], generation_error=provider_error)
+
+    response = client.post(
+        f"/documents/{document.id}/questions",
+        json={"question": "When can the landlord enter?"},
+    )
+
+    assert response.status_code == 503
+    assert response.json() == {
+        "detail": {
+            "code": "provider_configuration",
+            "message": "Question answering is not configured correctly on the server.",
+        }
+    }
+    assert "authentication payload" not in response.text
+
+
+def test_repeated_normalized_question_reuses_verified_document_cache(
+    client: TestClient,
+    db_session: Session,
+) -> None:
+    document = _document(db_session, DocumentStatus.READY)
+    result = _result(document.id)
+    db_session.add(
+        DocumentChunk(
+            id=result.chunk_id,
+            document_id=document.id,
+            chunk_index=result.chunk_index,
+            page_number=result.page_number,
+            text=result.text,
+            token_count=result.token_count or 1,
+            embedding=[0.25] * 1024,
+        )
+    )
+    db_session.commit()
+    _, embedding, retrieval, generation = _override_question_service(
+        results=[result]
+    )
+
+    first = client.post(
+        f"/documents/{document.id}/questions",
+        json={"question": "Can I have pets?"},
+    )
+    second = client.post(
+        f"/documents/{document.id}/questions",
+        json={"question": "  CAN I   HAVE pets?  "},
+    )
+
+    assert first.status_code == second.status_code == 200
+    assert first.json() == second.json()
+    assert embedding.questions == ["Can I have pets?"]
+    assert len(retrieval.calls) == 1
+    assert len(generation.calls) == 1
+    assert db_session.query(GroundedAnswerCache).count() == 1
+
+
+def test_cache_with_foreign_chunk_reference_is_not_reused(
+    client: TestClient,
+    db_session: Session,
+) -> None:
+    requested_document = _document(db_session, DocumentStatus.READY)
+    other_document = _document(db_session, DocumentStatus.READY)
+    foreign_result = _result(other_document.id)
+    db_session.add(
+        DocumentChunk(
+            id=foreign_result.chunk_id,
+            document_id=other_document.id,
+            chunk_index=foreign_result.chunk_index,
+            page_number=foreign_result.page_number,
+            text=foreign_result.text,
+            token_count=foreign_result.token_count or 1,
+            embedding=[0.25] * 1024,
+        )
+    )
+    db_session.add(
+        GroundedAnswerCache(
+            document_id=requested_document.id,
+            normalized_question="can i have pets?",
+            generation_version="v1",
+            answer="Foreign cached answer",
+            citations=[
+                {
+                    "chunk_id": str(foreign_result.chunk_id),
+                    "page_number": 99,
+                    "section_title": "Foreign",
+                    "snippet": "Foreign snippet",
+                    "score": 0.99,
+                }
+            ],
+        )
+    )
+    db_session.commit()
+    requested_result = _result(requested_document.id)
+    _, embedding, _, generation = _override_question_service(results=[requested_result])
+
+    response = client.post(
+        f"/documents/{requested_document.id}/questions",
+        json={"question": "Can I have pets?"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["answer"] != "Foreign cached answer"
+    assert embedding.questions == ["Can I have pets?"]
+    assert len(generation.calls) == 1
+
+
+def test_answer_cache_is_document_scoped_and_different_questions_do_not_collide(
+    client: TestClient,
+    db_session: Session,
+) -> None:
+    first_document = _document(db_session, DocumentStatus.READY)
+    second_document = _document(db_session, DocumentStatus.READY)
+    _, embedding, _, generation = _override_question_service(
+        results=[_result(first_document.id), _result(second_document.id)]
+    )
+
+    for document_id, question in [
+        (first_document.id, "Can I have pets?"),
+        (first_document.id, "Can I sublet?"),
+        (second_document.id, "Can I have pets?"),
+    ]:
+        response = client.post(f"/documents/{document_id}/questions", json={"question": question})
+        assert response.status_code == 200
+
+    assert embedding.questions == ["Can I have pets?", "Can I sublet?", "Can I have pets?"]
+    assert len(generation.calls) == 3
+    assert db_session.query(GroundedAnswerCache).count() == 3
+
+
+def test_failed_generation_is_not_cached(
+    client: TestClient,
+    db_session: Session,
+) -> None:
+    document = _document(db_session, DocumentStatus.READY)
+    _override_question_service(
+        results=[_result(document.id)],
+        generation_error=GenerationProviderError("failed provider"),
+    )
+
+    response = client.post(
+        f"/documents/{document.id}/questions",
+        json={"question": "Can I have pets?"},
+    )
+
+    assert response.status_code == 502
+    assert db_session.query(GroundedAnswerCache).count() == 0
+
+
+def test_source_less_abstention_is_not_cached(
+    client: TestClient,
+    db_session: Session,
+) -> None:
+    document = _document(db_session, DocumentStatus.READY)
+    _, embedding, retrieval, generation = _override_question_service(
+        results=[_result(document.id)],
+        generation_result=GroundedGenerationResult(
+            answer="I couldn't find enough information in this lease to answer that confidently.",
+            source_ids=[],
+        ),
+    )
+
+    for _ in range(2):
+        response = client.post(
+            f"/documents/{document.id}/questions",
+            json={"question": "Does the building have a swimming pool?"},
+        )
+        assert response.status_code == 200
+        assert response.json()["citations"] == []
+
+    assert embedding.questions == [
+        "Does the building have a swimming pool?",
+        "Does the building have a swimming pool?",
+    ]
+    assert len(retrieval.calls) == 2
+    assert len(generation.calls) == 2
+    assert db_session.query(GroundedAnswerCache).count() == 0
 
 
 def test_retrieve_endpoint_returns_document_scoped_evidence_without_embeddings(
@@ -299,6 +545,23 @@ def test_retrieve_endpoint_returns_document_scoped_evidence_without_embeddings(
     assert generation.calls == []
     assert "embedding" not in response.text
     assert str(foreign_result.chunk_id) not in response.text
+
+
+def test_retrieve_debug_endpoint_is_hidden_when_disabled(
+    client: TestClient,
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    document = _document(db_session, DocumentStatus.READY)
+    monkeypatch.setattr("app.api.routes.documents.settings.debug_endpoints_enabled", False)
+
+    response = client.post(
+        f"/documents/{document.id}/retrieve",
+        json={"question": "Can I have pets?"},
+    )
+
+    assert response.status_code == 404
+    assert response.json() == {"detail": "Not found."}
 
 
 def test_ready_document_with_no_chunks_fails_safely(

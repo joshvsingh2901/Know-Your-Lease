@@ -3,6 +3,7 @@ from pathlib import Path
 
 from sqlalchemy import func, select
 
+from app.models.answer_cache import GroundedAnswerCache
 from app.models.document import Document, DocumentStatus
 from app.models.document_chunk import DocumentChunk
 from app.services.document_ingestion import DocumentIngestionService
@@ -50,6 +51,17 @@ def test_valid_pdf_becomes_ready_with_document_scoped_chunks(
     pdf_path = make_pdf(tmp_path / "lease.pdf", [lease_text, lease_text])
     storage = DocumentStorage(tmp_path / "storage")
     document_id = stored_document(session_factory, storage, pdf_path)
+    with session_factory() as db:
+        db.add(
+            GroundedAnswerCache(
+                document_id=document_id,
+                normalized_question="can i have pets?",
+                generation_version="v1",
+                answer="Cached answer",
+                citations=[],
+            )
+        )
+        db.commit()
     service = DocumentIngestionService(
         session_factory=session_factory,
         storage=storage,
@@ -72,6 +84,11 @@ def test_valid_pdf_becomes_ready_with_document_scoped_chunks(
         assert all(chunk.document_id == document_id for chunk in chunks)
         assert {chunk.page_number for chunk in chunks} == {1, 2}
         assert [chunk.chunk_index for chunk in chunks] == list(range(len(chunks)))
+        assert db.scalar(
+            select(func.count()).select_from(GroundedAnswerCache).where(
+                GroundedAnswerCache.document_id == document_id
+            )
+        ) == 0
 
 
 def test_embedding_failure_marks_failed_and_removes_partial_index(

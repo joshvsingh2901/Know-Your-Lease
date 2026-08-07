@@ -6,7 +6,9 @@ from functools import lru_cache
 
 from sqlalchemy.orm import Session
 
+from app.core.config import settings
 from app.models.document import Document, DocumentStatus
+from app.services.answer_cache import AnswerCacheService, CachedCitation
 from app.services.citation_snippets import build_citation_snippet
 from app.services.embeddings import VoyageEmbeddingService, get_embedding_service
 from app.services.generation import (
@@ -59,12 +61,14 @@ class QuestionAnsweringService:
         embedding_service: VoyageEmbeddingService | None = None,
         retrieval_service: RetrievalService | None = None,
         generation_service: GeminiGenerationService | None = None,
+        answer_cache: AnswerCacheService | None = None,
         candidate_k: int = 10,
         final_k: int = 5,
     ) -> None:
         self.embedding_service = embedding_service or get_embedding_service()
         self.retrieval_service = retrieval_service or RetrievalService()
         self.generation_service = generation_service or get_generation_service()
+        self.answer_cache = answer_cache or AnswerCacheService(settings.answer_cache_version)
         self.candidate_k = candidate_k
         self.final_k = final_k
 
@@ -111,6 +115,24 @@ class QuestionAnsweringService:
         question: str,
     ) -> QuestionAnswer:
         total_started = time.perf_counter()
+        self._require_ready_document(db, document_id)
+        cached = self.answer_cache.get(db, document_id, question)
+        if cached is not None:
+            logger.info("Reused grounded answer cache for document %s", document_id)
+            return QuestionAnswer(
+                answer=cached.answer,
+                citations=[
+                    AnswerCitation(
+                        chunk_id=citation.chunk_id,
+                        page_number=citation.page_number,
+                        section_title=citation.section_title,
+                        snippet=citation.snippet,
+                        score=citation.score,
+                    )
+                    for citation in cached.citations
+                ],
+            )
+
         results = self.retrieve(db, document_id, question)
         if not results:
             raise NoRetrievedEvidenceError(
@@ -162,13 +184,30 @@ class QuestionAnsweringService:
                     score=result.score,
                 )
             )
+        answer = QuestionAnswer(answer=generated.answer, citations=citations)
+        self.answer_cache.store(
+            db,
+            document_id,
+            question,
+            answer.answer,
+            [
+                CachedCitation(
+                    chunk_id=citation.chunk_id,
+                    page_number=citation.page_number,
+                    section_title=citation.section_title,
+                    snippet=citation.snippet,
+                    score=citation.score,
+                )
+                for citation in answer.citations
+            ],
+        )
         logger.info(
             "Completed question for document %s with %d citations in %.3f seconds",
             document_id,
             len(citations),
             time.perf_counter() - total_started,
         )
-        return QuestionAnswer(answer=generated.answer, citations=citations)
+        return answer
 
 
 @lru_cache(maxsize=1)

@@ -2,7 +2,7 @@
 
 import { ChangeEvent, DragEvent, useEffect, useRef, useState } from "react";
 
-import { ApiError, getDocument, uploadDocument } from "@/lib/api";
+import { ApiError, getDocument, listDocuments, uploadDocument } from "@/lib/api";
 import {
   clearActiveDocumentId,
   restoreActiveDocument,
@@ -37,6 +37,7 @@ export function LeaseUpload() {
   const [error, setError] = useState<string | null>(null);
   const [document, setDocument] = useState<UploadedDocument | null>(null);
   const [isRestoringDocument, setIsRestoringDocument] = useState(true);
+  const [libraryDocuments, setLibraryDocuments] = useState<UploadedDocument[]>([]);
   const documentId = document?.id;
   const documentStatus = document?.status;
 
@@ -67,6 +68,21 @@ export function LeaseUpload() {
   }, []);
 
   useEffect(() => {
+    let isCurrent = true;
+    void listDocuments()
+      .then((documents) => {
+        if (isCurrent) setLibraryDocuments(documents.filter((document) => document.status === "ready"));
+      })
+      .catch(() => {
+        // The active-document restore flow already surfaces status errors. The optional
+        // local library should not block a new upload when the backend is unavailable.
+      });
+    return () => {
+      isCurrent = false;
+    };
+  }, []);
+
+  useEffect(() => {
     if (!documentId || !documentStatus || !shouldPollDocumentStatus(documentStatus)) return;
 
     const controller = new AbortController();
@@ -79,6 +95,11 @@ export function LeaseUpload() {
         failures = 0;
         if (latest.status === "failed") {
           clearActiveDocumentId(window.localStorage);
+        } else if (latest.status === "ready") {
+          setLibraryDocuments((documents) => [
+            latest,
+            ...documents.filter((item) => item.id !== latest.id),
+          ]);
         } else if (shouldPollDocumentStatus(latest.status)) {
           timeout = setTimeout(pollStatus, 1500);
         }
@@ -131,6 +152,9 @@ export function LeaseUpload() {
       const uploaded = await uploadDocument(file);
       saveActiveDocumentId(window.localStorage, uploaded.id);
       setDocument(uploaded);
+      if (uploaded.status === "ready") {
+        setLibraryDocuments((documents) => [uploaded, ...documents.filter((item) => item.id !== uploaded.id)]);
+      }
     } catch (uploadError) {
       setError(uploadError instanceof ApiError ? uploadError.message : "Upload failed. Please try again.");
     } finally {
@@ -144,6 +168,12 @@ export function LeaseUpload() {
     setDocument(null);
     setError(null);
     if (inputRef.current) inputRef.current.value = "";
+  }
+
+  function openExistingDocument(existingDocument: UploadedDocument) {
+    saveActiveDocumentId(window.localStorage, existingDocument.id);
+    setDocument(existingDocument);
+    setError(null);
   }
 
   if (isRestoringDocument) {
@@ -170,6 +200,23 @@ export function LeaseUpload() {
         <div className="p-5 sm:p-7">
           {!document ? (
             <>
+              {libraryDocuments.length > 0 && (
+                <div className="mb-5 rounded-xl border border-[var(--line)] bg-[var(--paper)] p-4">
+                  <p className="text-sm font-semibold text-[var(--navy)]">Open an indexed lease</p>
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    {libraryDocuments.map((existingDocument) => (
+                      <button
+                        key={existingDocument.id}
+                        type="button"
+                        onClick={() => openExistingDocument(existingDocument)}
+                        className="max-w-full truncate rounded-lg border border-[var(--line)] bg-white px-3 py-2 text-sm font-medium text-[var(--navy)] hover:border-[var(--accent)]"
+                      >
+                        {existingDocument.filename}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
               <div
                 className={`upload-hatch flex min-h-56 cursor-pointer flex-col items-center justify-center rounded-xl border-2 border-dashed px-5 py-10 text-center transition-colors ${
                   isDragging

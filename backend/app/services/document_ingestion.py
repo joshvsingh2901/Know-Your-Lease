@@ -7,6 +7,7 @@ from sqlalchemy import delete
 from sqlalchemy.orm import Session
 
 from app.core.database import SessionLocal
+from app.models.answer_cache import GroundedAnswerCache
 from app.models.document import Document, DocumentStatus
 from app.models.document_chunk import DocumentChunk
 from app.services.chunking import ChunkDraft, chunk_pages
@@ -81,6 +82,11 @@ class DocumentIngestionService:
                 raise StorageError("The document has no stored PDF.")
             document.status = DocumentStatus.PROCESSING
             document.error_message = None
+            db.execute(
+                delete(GroundedAnswerCache).where(
+                    GroundedAnswerCache.document_id == document_id
+                )
+            )
             db.commit()
             return document.storage_key
 

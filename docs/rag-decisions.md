@@ -66,6 +66,12 @@ The first baseline achieved **Hit@1 91.7%, Hit@3 95.8%, Hit@5 100.0%, and averag
 
 Unsupported-query top scores averaged 0.228, but this overlaps weak supported evidence, so there is no defensible relevance cutoff yet. Keep conservative evidence-bound generation/abstention and revisit threshold calibration only with a larger multi-lease labeled set.
 
+## Stage 6 exact-answer reuse and hardening
+
+Repeated grounded questions use a persistent PostgreSQL cache keyed by **document ID + whitespace/case-normalized exact question + cache version**. The cache stores only the final answer and backend-verified citation payload after successful generation; it never stores provider failures, no-evidence cases, or source-less abstentions. Cache hits revalidate chunk ownership, and re-indexing clears prior answers for that document. This avoids repeat Voyage/Gemini calls for the same question without semantic caching or cross-document reuse. `ANSWER_CACHE_VERSION` makes material prompt or response-format changes invalidate older entries explicitly.
+
+Provider failures remain retried only within their existing bounded policies. The API classifies known 429 rate limits, known upstream 5xx outages, missing or invalid configuration, and generic provider failures with safe machine-readable codes and non-sensitive messages. The lease remains untrusted evidence: provider output cannot supply page metadata, citations are verified against retrieved chunks, and prompt-injection text is data rather than instruction.
+
 ## Citation presentation and source inspection
 
 Retrieval chunks remain intentionally larger than user-facing citations. Larger chunks preserve clause context and retrieval quality; shrinking them merely to improve card readability would harm that boundary. Gemini now returns only the source IDs it used plus a short `quote` for each source. The backend normalizes whitespace and verifies that each quote is contained in its corresponding retrieval chunk. It never trusts a model quote that cannot be found in the chunk.
