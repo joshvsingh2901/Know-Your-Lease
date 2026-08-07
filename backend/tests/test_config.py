@@ -26,7 +26,7 @@ def test_development_does_not_require_provider_keys(tmp_path: Path) -> None:
         environment=" DEVELOPMENT ",
         voyage_api_key=None,
         gemini_api_key=None,
-        storage_root=tmp_path / "storage",
+        pdf_storage_dir=tmp_path / "storage",
     )
 
     validate_runtime_settings(config)
@@ -45,7 +45,7 @@ def test_production_configuration_requires_explicit_safe_values(tmp_path: Path) 
         voyage_api_key="example-voyage-key",
         gemini_api_key="example-gemini-key",
         debug_endpoints_enabled=False,
-        storage_root=tmp_path / "storage",
+        pdf_storage_dir=tmp_path / "storage",
     )
 
     validate_runtime_settings(config)
@@ -87,8 +87,31 @@ def test_cors_rejects_non_origin_or_wildcard_values(origin: str) -> None:
 def test_storage_cannot_be_configured_inside_frontend_public() -> None:
     config = Settings(
         _env_file=None,
-        storage_root=PROJECT_DIR / "frontend" / "public" / "uploads",
+        pdf_storage_dir=PROJECT_DIR / "frontend" / "public" / "uploads",
     )
 
-    with pytest.raises(RuntimeError, match="STORAGE_ROOT"):
+    with pytest.raises(RuntimeError, match="PDF_STORAGE_DIR"):
         validate_runtime_settings(config)
+
+
+def test_pdf_storage_directory_can_be_set_from_environment(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    volume_root = tmp_path / "railway-volume"
+    monkeypatch.setenv("PDF_STORAGE_DIR", str(volume_root))
+
+    config = Settings(_env_file=None)
+
+    assert config.pdf_storage_dir == volume_root
+
+
+@pytest.mark.parametrize("scheme", ["postgresql://", "postgres://"])
+def test_railway_database_url_uses_installed_psycopg_driver(scheme: str) -> None:
+    config = Settings(
+        _env_file=None,
+        database_url=f"{scheme}user:password@postgres.railway.internal:5432/railway",
+    )
+
+    assert config.database_url_value() == (
+        "postgresql+psycopg://user:password@postgres.railway.internal:5432/railway"
+    )

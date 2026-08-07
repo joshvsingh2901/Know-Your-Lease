@@ -1,42 +1,92 @@
 # Know Your Lease
 
-Know Your Lease is a portfolio-quality legal document assistant. It accepts a lease PDF, retains it safely, extracts page-aware text, indexes retrieval chunks with Voyage AI and pgvector, and answers questions using only retrieved lease evidence. Stage 4 adds concise verified citations and side-by-side source inspection.
+Know Your Lease turns a lease PDF into a source-grounded question-answering workspace. A user uploads once, waits for page-aware indexing, then asks questions and inspects concise verified citations directly in the original PDF.
 
-## Technology stack
+The project is deliberately evidence-bound: Gemini receives only retrieved lease excerpts, model source IDs are validated, page metadata comes from PostgreSQL, and model quotes must occur in the cited chunk. Unsupported answers abstain instead of silently falling back to outside legal knowledge.
 
-- **Frontend:** Next.js, React, TypeScript, Tailwind CSS
-- **Backend:** FastAPI, Pydantic, SQLAlchemy, Alembic
-- **Ingestion:** PyMuPDF, a local paragraph/sentence-aware chunker, Voyage AI
-- **RAG:** Voyage query embeddings, exact pgvector cosine search, Gemini structured generation
-- **Database:** PostgreSQL 18 with pgvector
-- **Local infrastructure:** Docker Compose
+## Product workflow
 
-## Repository structure
+1. Upload a digital PDF lease.
+2. Extract and normalize page-aware text without paraphrasing it.
+3. Build conservative overlapping chunks and embed them with `voyage-law-2`.
+4. Store document metadata, chunks, and 1,024-dimensional vectors in PostgreSQL + pgvector.
+5. Retrieve document-scoped evidence with exact cosine search.
+6. Generate a structured grounded answer with Gemini.
+7. Verify citations in backend code and navigate to their PDF pages.
+8. Reuse verified answers for repeat exact-normalized questions without another provider call.
 
-```text
-frontend/                    Next.js upload, questions, PDF viewer, and citation UI
-backend/
-  app/api/routes/            Document, retrieval, and question endpoints
-  app/models/                Document and DocumentChunk entities
-  app/services/              Ingestion, retrieval, grounded-generation services
-  alembic/                   Database migrations
-  scripts/test_ingestion.py  Optional real Voyage smoke test
-  storage/uploads/           Ignored local PDF storage
-  tests/                     Mocked, offline automated tests
-docs/                        Architecture and RAG decision record
+```mermaid
+flowchart LR
+    UI[Next.js workspace] -->|PDF upload| API[FastAPI]
+    API --> STORE[Private PDF storage]
+    API --> EXTRACT[PyMuPDF extraction and chunking]
+    EXTRACT --> VOYAGE[Voyage embeddings]
+    VOYAGE --> PG[(PostgreSQL + pgvector)]
+    UI -->|Question| API
+    API -->|Document-scoped exact search| PG
+    PG -->|At most 5 excerpts| GEMINI[Gemini structured generation]
+    GEMINI --> VERIFY[Source ID and quote verification]
+    VERIFY --> UI
+    VERIFY --> CACHE[(Verified answer cache)]
 ```
 
-## Prerequisites
+## Architecture and stack
 
-- Python 3.11+
-- Node.js 20.19+, 22.13+, or 24+
-- Docker Desktop or another Docker Engine with Compose
-- A Voyage AI API key for real document indexing and question embeddings
-- A Google Gemini API key for grounded answers
+- **Frontend:** Next.js 16, React 19, TypeScript, Tailwind CSS, React-PDF
+- **Backend:** FastAPI, Pydantic, SQLAlchemy, Alembic
+- **Extraction:** PyMuPDF with page-preserving normalization
+- **Embeddings:** Voyage AI `voyage-law-2`, asymmetric document/query modes
+- **Retrieval:** exact pgvector cosine search, 10 candidates diversified to at most 5
+- **Generation:** Gemini structured JSON through the official Google GenAI SDK
+- **Persistence:** PostgreSQL + pgvector, UUID-owned PDF storage, persistent verified-answer cache
+- **Deployment target:** Vercel frontend; Railway API, pgvector PostgreSQL, and persistent volume
 
-## Setup
+The application does not use LangChain, LlamaIndex, a second vector database, semantic caching, or an extra LLM verification call. Those additions are deferred until evaluation demonstrates a concrete need.
 
-From the repository root:
+## Retrieval evaluation
+
+The production retrieval path was evaluated independently from generation against 24 supported questions and 3 unsupported controls on a representative 34-page lease with 50 indexed chunks.
+
+| Metric | Result |
+| --- | ---: |
+| Hit@1 | 91.7% |
+| Hit@3 | 95.8% |
+| Hit@5 | 100.0% |
+| Average first relevant rank | 1.17 |
+
+Every labeled source appeared in the final top five, so the measured baseline remained vector-only without benchmark-driven reranking or hybrid search. The private evaluation lease is not part of this repository.
+
+## Grounding, privacy, and hardening
+
+- Retrieval and cache access are strictly scoped by `document_id`.
+- Every document API route passes through one access-policy seam for future ownership enforcement.
+- Questions and lease excerpts are JSON-encoded untrusted data separated from system instructions.
+- Unknown model source IDs reject the response; source-less output becomes a fixed abstention.
+- Citation page/chunk metadata is backend-owned, and model quotes require normalized containment.
+- PDFs use generated UUID keys outside frontend public assets; internal paths never enter API responses.
+- Provider/database secrets are masked configuration and `.env` files are ignored.
+- Production rejects wildcard CORS, loopback/non-HTTPS frontend origins, enabled debug routes, missing provider configuration, and public frontend PDF storage.
+- Exact-question cache hits skip both Voyage query embedding and Gemini generation; paraphrases never collide automatically.
+
+This remains a single-user portfolio application. Browser `localStorage` remembers the active UUID for convenience but is not authorization. Do not expose sensitive leases to untrusted users until authenticated document ownership is implemented.
+
+## Repository layout
+
+```text
+frontend/                       Next.js upload, Q&A, citations, and PDF viewer
+backend/app/api/                FastAPI routes and centralized document access seam
+backend/app/services/           Storage, ingestion, retrieval, generation, and cache
+backend/app/models/             Documents, chunks, and grounded-answer cache
+backend/alembic/                Additive production database migrations
+backend/evaluation/             Question labels only; no private lease text
+backend/tests/                  Offline provider-mocked regression suite
+docs/                           Architecture, decisions, evaluation, and deployment
+railway.toml                    Railway build/deploy/health configuration
+```
+
+## Local setup
+
+Prerequisites: Python 3.13, Node.js 20.19+/22.13+/24+, Docker, a Voyage API key, and a Gemini API key.
 
 ```bash
 cp backend/.env.example backend/.env
@@ -51,136 +101,56 @@ npm install
 cd ..
 ```
 
-Set these values in `backend/.env`:
-
-```dotenv
-VOYAGE_API_KEY=your-key-here
-VOYAGE_EMBEDDING_MODEL=voyage-law-2
-GEMINI_API_KEY=your-key-here
-GEMINI_MODEL=gemini-3.5-flash
-```
-
-Optional generation settings are `GEMINI_MAX_OUTPUT_TOKENS=2048`, `GEMINI_THINKING_LEVEL=low`, `GEMINI_MAX_RETRIES=1`, and `GEMINI_RETRY_BASE_SECONDS=2`. Real `.env` files and `backend/storage/uploads/` are ignored by Git. No provider key is exposed to the browser.
-
-## Run locally
-
-Start PostgreSQL and apply the migrations:
+Add your provider keys to `backend/.env`, then start PostgreSQL and apply the additive migrations:
 
 ```bash
 docker compose up -d database
-docker compose ps
 cd backend
 source .venv/bin/activate
 alembic upgrade head
-```
-
-Start FastAPI:
-
-```bash
 uvicorn app.main:app --reload --port 8000
 ```
 
-In another terminal, start Next.js:
+In another terminal:
 
 ```bash
 cd frontend
 npm run dev
 ```
 
-Open `http://localhost:3000`. If port 3000 is occupied, use `npm run dev:3001`; both explicit local origins are permitted in development.
+Open `http://localhost:3000`. Local PDFs default to `backend/storage/uploads/`; override the root with `PDF_STORAGE_DIR` when needed.
 
-## Upload, indexing, and question lifecycle
+## API surface
 
-```text
-POST PDF
-  → validate and store under backend/storage/uploads/<document-id>.pdf
-  → uploaded
-  → background processing
-  → page-aware extraction and normalization
-  → page-scoped chunks
-  → batched Voyage embeddings
-  → PostgreSQL DocumentChunk rows with pgvector vectors
-  → ready (or failed with a safe error message)
-```
+- `GET /health` — deployment health check
+- `POST /documents` — validate, persist, and schedule ingestion
+- `GET /documents` — safe local document library metadata
+- `GET /documents/{id}` — processing status and metadata
+- `GET /documents/{id}/pdf` — original PDF stream
+- `POST /documents/{id}/questions` — grounded answer and verified citations
+- `GET /documents/{id}/chunks` — development-only chunk inspection
+- `POST /documents/{id}/retrieve` — development-only retrieval diagnosis
 
-The frontend polls document status until `ready` or `failed`. PDFs with little or no extractable text fail clearly because OCR is not implemented yet.
+Debug endpoints return 404 when disabled and are rejected by production configuration if explicitly enabled.
 
-Once the document is ready:
+## Deployment
 
-```text
-Question
-  → one Voyage voyage-law-2 embedding with input_type=query
-  → exact cosine search over chunks filtered by document_id
-  → 10 candidates, diversified to at most 5 evidence chunks
-  → Gemini receives only those excerpts as untrusted evidence
-  → structured answer plus SOURCE_n identifiers and supporting quotes
-  → backend verifies each quote against its retrieval chunk
-  → bounded local fallback excerpt when a quote is invalid or omitted
-  → answer with concise source snippets and PDF page navigation
-```
+The supported deployment target is:
 
-Gemini never receives the entire PDF and never supplies trusted page numbers. If its structured response contains no supporting source IDs, the backend returns a fixed abstention instead of an unsupported answer; an unknown source ID rejects the response safely.
+- Vercel project rooted at `frontend/`
+- Railway service rooted at `backend/`
+- Railway pgvector template, not the standard PostgreSQL image
+- Railway persistent volume mounted at `/data/documents`
 
-The full chunk is retained for retrieval only. Citation cards show a short verified quote or a deterministic sentence-based fallback, rather than the entire chunk. Selecting **View in lease** moves the PDF viewer to the cited page.
-
-## API
-
-- `GET /health` — service health.
-- `POST /documents` — validate/store a PDF, create its record, and enqueue in-process ingestion.
-- `GET /documents/{document_id}` — current `uploaded | processing | ready | failed` state.
-- `GET /documents/{document_id}/pdf` — serve the original document as `application/pdf` for the in-app viewer.
-- `GET /documents/{document_id}/chunks?limit=50&offset=0` — paginated development inspection of chunk text and provenance; embeddings are intentionally omitted.
-- `POST /documents/{document_id}/retrieve` — development retrieval inspection without Gemini generation.
-- `POST /documents/{document_id}/questions` — answer one question using retrieved evidence and return backend-owned citations.
-
-Example inspection after an upload:
-
-```bash
-curl http://localhost:8000/documents/DOCUMENT_ID
-curl -I http://localhost:8000/documents/DOCUMENT_ID/pdf
-curl 'http://localhost:8000/documents/DOCUMENT_ID/chunks?limit=10'
-curl -X POST http://localhost:8000/documents/DOCUMENT_ID/retrieve \
-  -H 'Content-Type: application/json' \
-  -d '{"question":"Can I have pets?"}'
-curl -X POST http://localhost:8000/documents/DOCUMENT_ID/questions \
-  -H 'Content-Type: application/json' \
-  -d '{"question":"Can I have pets?"}'
-```
-
-Question request strings are limited to 1–1,000 characters and cannot be blank. Questions are accepted only for `ready` documents. The debug retrieval response and answer citations include text, page metadata, and similarity scores, but never embedding arrays.
-
-## Optional real Voyage ingestion test
-
-After the database is running, migrations are current, and `VOYAGE_API_KEY` is set:
-
-```bash
-cd backend
-source .venv/bin/activate
-python scripts/test_ingestion.py /absolute/path/to/small-digital-lease.pdf
-```
-
-The command makes real Voyage calls, respects the configured 3 RPM / 10,000 TPM limits, and reports the document ID, final status, chunk count, and page numbers. It is never run by the automated test suite.
-
-## Current limitations
-
-- Scanned/image-only leases need OCR, which is not implemented.
-- Ingestion runs in-process rather than through a durable worker queue.
-- Rate-limit coordination is process-local, so a multi-process deployment needs shared coordination.
-- Authentication and user ownership are not implemented; retrieval is nevertheless always scoped to one document ID.
-- Questions are independent: there is no chat history or follow-up rewriting.
-- Retrieval uses an exact vector baseline without reranking or hybrid/full-text search.
-- Citation cards use short verified excerpts. The PDF text layer highlights them when a normalized text match succeeds; imperfect PDF text layers fall back safely to page navigation.
+Railway configuration runs `alembic upgrade head` before deployment, starts one Uvicorn process on `0.0.0.0:$PORT`, and checks `/health`. See the [deployment runbook](docs/deployment.md) for exact dashboard settings and environment variables.
 
 ## Verification
 
 ```bash
 cd backend
 source .venv/bin/activate
+pytest
 ruff check .
-pytest -q
-alembic upgrade head
-alembic check
-python -c "from app.main import app; print(app.version)"
 
 cd ../frontend
 npm run lint
@@ -188,7 +158,20 @@ npm run typecheck
 npm run build
 
 cd ..
-docker compose config --quiet
+git diff --check
 ```
 
-See [the architecture](docs/architecture.md) and [the RAG decisions](docs/rag-decisions.md) for the implemented design and its current tradeoffs.
+Automated tests mock Voyage and Gemini; they do not make provider calls or re-index a lease.
+
+## Current limitations
+
+- No authentication or user/document ownership enforcement yet
+- In-process ingestion rather than a durable worker queue
+- Single-process provider rate coordination
+- Railway volume storage rather than managed object storage
+- No OCR, malware scanning, or encrypted retention workflow
+- No calibrated retrieval threshold, reranker, or hybrid lexical retrieval
+- No chat history or follow-up question rewriting
+- Best-effort text-layer highlighting rather than coordinate-level highlights
+
+Further detail lives in [architecture](docs/architecture.md), [RAG decisions](docs/rag-decisions.md), [retrieval evaluation](docs/retrieval-evaluation.md), and [production hardening](docs/production-hardening.md).

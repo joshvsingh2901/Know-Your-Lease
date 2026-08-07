@@ -23,7 +23,7 @@ class Settings(BaseSettings):
         "http://localhost:3001,http://127.0.0.1:3000,http://127.0.0.1:3001"
     )
     max_upload_size_mb: int = Field(default=20, gt=0, le=1_024)
-    storage_root: Path = BACKEND_DIR / "storage"
+    pdf_storage_dir: Path = BACKEND_DIR / "storage"
     minimum_extractable_characters: int = 50
     chunk_target_tokens: int = 600
     chunk_max_tokens: int = 750
@@ -94,7 +94,12 @@ class Settings(BaseSettings):
         return self.environment == "development"
 
     def database_url_value(self) -> str:
-        return self.database_url.get_secret_value()
+        database_url = self.database_url.get_secret_value()
+        if database_url.startswith("postgresql://"):
+            return database_url.replace("postgresql://", "postgresql+psycopg://", 1)
+        if database_url.startswith("postgres://"):
+            return database_url.replace("postgres://", "postgresql+psycopg://", 1)
+        return database_url
 
 
 def _validated_origin(value: str, setting_name: str) -> str:
@@ -133,9 +138,9 @@ def validate_runtime_settings(config: Settings) -> None:
         problems.append(str(exc))
 
     frontend_public = (PROJECT_DIR / "frontend" / "public").resolve()
-    storage_root = config.storage_root.resolve()
+    storage_root = config.pdf_storage_dir.resolve()
     if storage_root == frontend_public or frontend_public in storage_root.parents:
-        problems.append("STORAGE_ROOT must not be inside frontend/public.")
+        problems.append("PDF_STORAGE_DIR must not be inside frontend/public.")
 
     if config.environment == "production":
         primary_origin = origins[0] if origins else ""

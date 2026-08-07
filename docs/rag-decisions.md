@@ -90,7 +90,7 @@ The frontend unlocks its question panel after indexing reaches `ready`, provides
 
 ## Storage, atomicity, and execution
 
-Development PDFs are written atomically to `backend/storage/uploads/<document-uuid>.pdf`; the original filename is stored separately and never used as a path. `DocumentStorage` isolates this policy so object storage can replace it later.
+PDFs are written atomically to `<PDF_STORAGE_DIR>/uploads/<document-uuid>.pdf`; local development defaults `PDF_STORAGE_DIR` to `backend/storage`, while Railway uses a persistent volume rooted at `/data/documents`. The original filename is stored separately and never used as a path. `DocumentStorage` isolates this policy so object storage can replace it later.
 
 FastAPI schedules ingestion with an in-process background task. Chunks are inserted only after extraction, chunking, and all embeddings succeed. The final transaction removes stale chunks, inserts the full replacement index, and marks the document `ready`; failures remove chunks and mark it `failed` with a safe message.
 

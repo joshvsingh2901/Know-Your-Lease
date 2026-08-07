@@ -37,7 +37,7 @@ Answer, compact citation cards, and PDF page navigation
 - `frontend/` owns file selection, upload feedback, polling, single-turn questions, a responsive side-by-side PDF viewer, answer display, and compact source cards. Citation interaction changes the viewer page and visibly selects the source card.
 - `backend/app/api/routes/documents.py` owns upload validation plus document-library, PDF, development-debug, and question contracts.
 - `backend/app/api/document_access.py` is the single route-level document access boundary. It currently exposes all local records; a future authenticated owner predicate belongs there.
-- `backend/app/services/storage.py` maps a document UUID to an internal `uploads/<uuid>.pdf` key. Original filenames are metadata only.
+- `backend/app/services/storage.py` maps a document UUID to an internal `uploads/<uuid>.pdf` key beneath `PDF_STORAGE_DIR`. Original filenames are metadata only.
 - `backend/app/services/pdf_extraction.py`, `text_normalization.py`, and `chunking.py` form an inspectable preprocessing pipeline with no LLM or orchestration framework.
 - `backend/app/services/embeddings.py` batches document chunks, applies account-aware pacing and bounded transient retries, and validates Voyage output.
 - `backend/app/services/document_ingestion.py` owns status transitions and the final all-or-nothing chunk persistence transaction.
@@ -98,7 +98,7 @@ Repeated questions first check `grounded_answer_cache` using the document ID, wh
 
 ## Persistence and isolation
 
-The original PDF remains in gitignored `backend/storage/uploads/` for future source viewing, outside frontend public assets. UUIDs generate storage keys; original filenames are display metadata only. Storage resolution rejects paths outside the uploads root, API responses never expose internal paths, and missing files return a fixed safe 404. Each chunk and cache row has a required foreign key to exactly one document with intentional delete cascade. Retrieval includes a `document_id` SQL filter before ranking and applies a second defensive scope check in orchestration; there is intentionally no global corpus search design.
+The original PDF remains under the gitignored local `backend/storage/uploads/` default or the configured `PDF_STORAGE_DIR` for future source viewing, always outside frontend public assets. Railway mounts the production volume at `/data/documents`, so stored PDFs live under `/data/documents/uploads/`. UUIDs generate storage keys; original filenames are display metadata only. Storage resolution rejects paths outside the uploads root, API responses never expose internal paths, and missing files return a fixed safe 404. Each chunk and cache row has a required foreign key to exactly one document with intentional delete cascade. Retrieval includes a `document_id` SQL filter before ranking and applies a second defensive scope check in orchestration; there is intentionally no global corpus search design.
 
 `GET /documents` is a lightweight local/single-user library of safe document metadata. The frontend can reopen a ready record without processing it again. Metadata, list, PDF, question, chunk, and retrieval routes all pass through the centralized route access boundary. Browser localStorage remembers only the active UUID and is not an access-control mechanism; production must add an authenticated owner/tenant predicate at that boundary before multi-user deployment. Internal scripts and services operate in a trusted local context and must receive an already-authorized document ID in a future multi-user system.
 
@@ -115,6 +115,10 @@ Page numbers, section titles, snippets, similarity scores, and chunk IDs are map
 ## Processing boundary
 
 FastAPI `BackgroundTasks` keeps the upload request responsive without adding Redis or a worker service. The embedding service is process-local and serializes provider calls so its 3 RPM / 10K TPM pacing applies across uploads handled by that process. This is an MVP execution model: a production deployment should move ingestion to a durable queue because in-flight work is lost if the API process restarts, and rate limiting would need coordination across multiple API processes.
+
+## Deployment boundary
+
+The frontend deploys from `frontend/` to Vercel and reads the public Railway API origin from `NEXT_PUBLIC_API_BASE_URL`. The backend deploys from `backend/` through Railway Railpack. `railway.toml` applies Alembic migrations in the pre-deploy phase, starts one Uvicorn process on `0.0.0.0:$PORT`, and checks `/health`. Railway's pgvector-specific PostgreSQL template is required; the standard PostgreSQL image does not include pgvector. Railway-style `postgresql://` URLs are normalized to the installed psycopg 3 SQLAlchemy dialect without changing credentials.
 
 ## Production boundaries and current limitations
 

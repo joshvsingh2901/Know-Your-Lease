@@ -17,7 +17,7 @@ class StorageError(RuntimeError):
 
 class DocumentStorage:
     def __init__(self, root: Path | None = None) -> None:
-        self.root = (root or settings.storage_root).resolve()
+        self.root = (root or settings.pdf_storage_dir).resolve()
         self.uploads_root = (self.root / "uploads").resolve()
 
     def save(self, document_id: uuid.UUID, source: BinaryIO) -> str:

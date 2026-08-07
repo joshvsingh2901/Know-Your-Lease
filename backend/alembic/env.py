@@ -9,7 +9,7 @@ from app.models import Document, DocumentChunk, GroundedAnswerCache  # noqa: F40
 
 config = context.config
 database_url = settings.database_url_value()
-config.set_main_option("sqlalchemy.url", database_url)
+config.set_main_option("sqlalchemy.url", database_url.replace("%", "%%"))
 
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)

@@ -18,7 +18,7 @@ Chunk inspection and retrieval diagnostics are enabled by default only when `ENV
 
 ## File and storage privacy
 
-PDF uploads require a sanitized `.pdf` display filename, accepted PDF media type, `%PDF-` signature, and configured size limit before persistence. Storage ignores the display filename and atomically writes `backend/storage/uploads/<document-uuid>.pdf`; path resolution cannot leave the uploads root. The uploads directory and PDF/database/key artifacts are gitignored, and the audit found none tracked. PDFs never enter frontend public assets, internal storage keys are absent from response schemas, and missing or invalid files return a fixed response without filesystem details. Extraction logs contain document IDs, page/chunk counts, and status—not lease text.
+PDF uploads require a sanitized `.pdf` display filename, accepted PDF media type, `%PDF-` signature, and configured size limit before persistence. Storage ignores the display filename and atomically writes `<PDF_STORAGE_DIR>/uploads/<document-uuid>.pdf`; local development defaults to `backend/storage`, and Railway mounts `/data/documents`. Path resolution cannot leave the uploads root. The uploads directory and PDF/database/key artifacts are gitignored, and the audit found none tracked. PDFs never enter frontend public assets, internal storage keys are absent from response schemas, and missing or invalid files return a fixed response without filesystem details. Extraction logs contain document IDs, page/chunk counts, and status—not lease text.
 
 ## Grounding and prompt injection
 
@@ -26,7 +26,7 @@ Gemini's system instruction is separate from the JSON-encoded user question and 
 
 ## Configuration, CORS, and logs
 
-Database and provider credentials use masked secret settings and are unwrapped only at their client boundaries. `.env` files are gitignored and `.env.example` contains development/example or blank values. Development remains key-optional so mocked tests and non-provider routes work normally. Production startup requires an explicit database URL, both provider keys, an HTTPS non-loopback `FRONTEND_ORIGIN`, disabled debug endpoints, and storage outside `frontend/public`; error messages name settings without echoing values.
+Database and provider credentials use masked secret settings and are unwrapped only at their client boundaries. `.env` files are gitignored and `.env.example` contains development/example or blank values. Development remains key-optional so mocked tests and non-provider routes work normally. Production startup requires an explicit database URL, both provider keys, an HTTPS non-loopback `FRONTEND_ORIGIN`, disabled debug endpoints, and `PDF_STORAGE_DIR` outside `frontend/public`; error messages name settings without echoing values. Railway `postgresql://` connection strings are normalized to `postgresql+psycopg://` because psycopg 3 is the installed driver.
 
 CORS never accepts a wildcard or origins containing credentials, paths, queries, or fragments. Development allows the primary `http://localhost:3000` plus explicit local fallback origins. Non-development environments ignore the fallback list and allow only `FRONTEND_ORIGIN`.
 
@@ -38,4 +38,6 @@ Chunks and grounded-answer cache rows have required document foreign keys with i
 
 ## Remaining production work
 
-There is still no authentication, owner/tenant data model, managed object storage or explicit encryption/retention policy, durable job queue, cross-process rate coordination, OCR, malware scanning, backup/restore policy, or deployment infrastructure. Prompt controls reduce injection risk but cannot prove semantic faithfulness, and abstention has no calibrated relevance threshold. The application must not be exposed as a multi-user service until authenticated document ownership is implemented at the central access boundary.
+There is still no authentication, owner/tenant data model, managed object storage or explicit encryption/retention policy, durable job queue, cross-process rate coordination, OCR, malware scanning, backup/restore automation, or multi-region deployment infrastructure. Prompt controls reduce injection risk but cannot prove semantic faithfulness, and abstention has no calibrated relevance threshold. The application must not be exposed as a multi-user service until authenticated document ownership is implemented at the central access boundary.
+
+The supported portfolio deployment uses one Railway API replica, Railway's pgvector template, an attached `/data/documents` volume, and a Vercel frontend. Alembic runs as a Railway pre-deploy command; Uvicorn binds to Railway's injected `PORT`; `/health` gates activation; production CORS accepts only the final Vercel HTTPS origin. This makes the current single-user demo deployable but does not remove the limitations above.
