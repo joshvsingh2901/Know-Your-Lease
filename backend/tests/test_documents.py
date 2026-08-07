@@ -112,3 +112,59 @@ def test_missing_document_returns_not_found(client: TestClient) -> None:
     response = client.get(f"/documents/{uuid.uuid4()}")
 
     assert response.status_code == 404
+
+
+def test_document_pdf_streams_from_document_storage(
+    client: TestClient,
+    db_session: Session,
+    tmp_path: Path,
+) -> None:
+    document_id = uuid.uuid4()
+    document = Document(
+        id=document_id,
+        original_filename="lease.pdf",
+        storage_key=f"uploads/{document_id}.pdf",
+        status=DocumentStatus.READY,
+    )
+    db_session.add(document)
+    db_session.commit()
+    expected_pdf = b"%PDF-1.4\nPDF body\n%%EOF"
+    stored_pdf = tmp_path / "storage" / "uploads" / f"{document_id}.pdf"
+    stored_pdf.parent.mkdir(parents=True)
+    stored_pdf.write_bytes(expected_pdf)
+
+    response = client.get(f"/documents/{document_id}/pdf")
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("application/pdf")
+    assert response.headers["cache-control"] == "no-store"
+    assert response.content == expected_pdf
+
+
+def test_document_pdf_missing_storage_file_is_safe_and_does_not_leak_path(
+    client: TestClient,
+    db_session: Session,
+) -> None:
+    document_id = uuid.uuid4()
+    db_session.add(
+        Document(
+            id=document_id,
+            original_filename="lease.pdf",
+            storage_key=f"uploads/{document_id}.pdf",
+            status=DocumentStatus.READY,
+        )
+    )
+    db_session.commit()
+
+    response = client.get(f"/documents/{document_id}/pdf")
+
+    assert response.status_code == 404
+    assert response.json() == {"detail": "Document PDF is unavailable."}
+    assert "uploads" not in response.text
+
+
+def test_nonexistent_document_pdf_returns_not_found(client: TestClient) -> None:
+    response = client.get(f"/documents/{uuid.uuid4()}/pdf")
+
+    assert response.status_code == 404
+    assert response.json() == {"detail": "Document not found."}

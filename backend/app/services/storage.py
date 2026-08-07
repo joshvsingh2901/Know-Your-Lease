@@ -2,6 +2,7 @@ import logging
 import os
 import shutil
 import uuid
+from functools import lru_cache
 from pathlib import Path
 from typing import BinaryIO
 
@@ -50,3 +51,8 @@ class DocumentStorage:
             self.resolve(storage_key).unlink(missing_ok=True)
         except OSError as exc:
             raise StorageError("The stored PDF could not be removed.") from exc
+
+
+@lru_cache(maxsize=1)
+def get_document_storage() -> DocumentStorage:
+    return DocumentStorage()

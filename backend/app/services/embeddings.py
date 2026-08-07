@@ -7,6 +7,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from email.utils import parsedate_to_datetime
+from functools import lru_cache
 from typing import Any
 
 import voyageai
@@ -193,7 +194,12 @@ class VoyageEmbeddingService:
             except (TypeError, ValueError, OverflowError):
                 return None
 
-    def _embed_batch(self, batch: _EmbeddingBatch) -> list[list[float]]:
+    def _embed_batch(
+        self,
+        batch: _EmbeddingBatch,
+        *,
+        input_type: str,
+    ) -> list[list[float]]:
         client = self._get_client()
         for attempt in range(self.max_retries + 1):
             self._reserve_provider_request(batch.token_count)
@@ -202,7 +208,7 @@ class VoyageEmbeddingService:
                 result = client.embed(
                     batch.texts,
                     model=self.model,
-                    input_type="document",
+                    input_type=input_type,
                     truncation=False,
                 )
                 provider_tokens = getattr(result, "total_tokens", None)
@@ -303,7 +309,7 @@ class VoyageEmbeddingService:
                     len(batch.texts),
                     batch.token_count,
                 )
-                batch_vectors = self._embed_batch(batch)
+                batch_vectors = self._embed_batch(batch, input_type="document")
                 if len(batch_vectors) != len(batch.texts):
                     raise EmbeddingError(
                         "Voyage returned a different number of vectors than inputs."
@@ -318,3 +324,28 @@ class VoyageEmbeddingService:
         if len(vectors) != len(texts):
             raise EmbeddingError("Embedding output order could not be validated.")
         return vectors
+
+    def embed_query(self, question: str) -> list[float]:
+        normalized_question = question.strip()
+        if not normalized_question:
+            raise EmbeddingError("A non-empty question is required for query embedding.")
+
+        estimated_tokens = max(1, len(normalized_question.split()) * 2)
+        budget_token_count = self._budget_token_counts(
+            [normalized_question],
+            [estimated_tokens],
+        )[0]
+        batch = _EmbeddingBatch([normalized_question], budget_token_count)
+        with self._request_lock:
+            vectors = self._embed_batch(batch, input_type="query")
+
+        if len(vectors) != 1 or len(vectors[0]) != self.dimensions:
+            raise EmbeddingError(
+                "Voyage returned an invalid query embedding shape."
+            )
+        return vectors[0]
+
+
+@lru_cache(maxsize=1)
+def get_embedding_service() -> VoyageEmbeddingService:
+    return VoyageEmbeddingService()

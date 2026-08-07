@@ -13,8 +13,11 @@ logging.basicConfig(
 
 app = FastAPI(
     title=settings.app_name,
-    version="0.2.0",
-    description="Upload, extract, chunk, and vector-index lease documents.",
+    version="0.3.0",
+    description=(
+        "Upload and index lease documents, then ask grounded questions with "
+        "backend-owned source citations."
+    ),
 )
 
 app.add_middleware(

@@ -35,6 +35,12 @@ class Settings(BaseSettings):
     voyage_estimate_fallback_multiplier: float = 2.5
     voyage_max_retries: int = 2
     voyage_retry_base_seconds: float = 2.0
+    gemini_api_key: str | None = None
+    gemini_model: str = "gemini-3.5-flash"
+    gemini_max_output_tokens: int = 2_048
+    gemini_thinking_level: str = "low"
+    gemini_max_retries: int = 1
+    gemini_retry_base_seconds: float = 2.0
 
     model_config = SettingsConfigDict(
         env_file=BACKEND_DIR / ".env",

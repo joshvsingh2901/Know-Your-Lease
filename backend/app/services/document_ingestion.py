@@ -15,6 +15,7 @@ from app.services.embeddings import (
     EmbeddingError,
     EmbeddingProviderError,
     VoyageEmbeddingService,
+    get_embedding_service,
 )
 from app.services.pdf_extraction import PDFExtractionError, extract_pdf_pages
 from app.services.storage import DocumentStorage, StorageError
@@ -37,7 +38,7 @@ class DocumentIngestionService:
     ) -> None:
         self.session_factory = session_factory
         self.storage = storage or DocumentStorage()
-        self.embedding_service = embedding_service or VoyageEmbeddingService()
+        self.embedding_service = embedding_service or get_embedding_service()
         self.extractor = extractor
         self.chunker = chunker
 

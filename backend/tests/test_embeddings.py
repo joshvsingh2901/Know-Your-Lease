@@ -19,9 +19,11 @@ class RecordingClient:
     def __init__(self, dimensions: int = 4) -> None:
         self.dimensions = dimensions
         self.calls: list[list[str]] = []
+        self.input_types: list[str | None] = []
 
     def embed(self, texts, **kwargs):
         self.calls.append(list(texts))
+        self.input_types.append(kwargs.get("input_type"))
         start = sum(len(call) for call in self.calls[:-1])
         return FakeEmbeddingResult(
             [[float(start + index)] * self.dimensions for index, _ in enumerate(texts)]
@@ -208,3 +210,21 @@ def test_embeddings_require_aligned_inputs() -> None:
 
     with pytest.raises(EmbeddingError, match="aligned"):
         service.embed_documents(["one"], [])
+
+
+def test_query_embedding_uses_query_input_type() -> None:
+    client = RecordingClient()
+    service = VoyageEmbeddingService(
+        client=client,
+        dimensions=4,
+        token_counter=lambda texts: [4 for _ in texts],
+        token_safety_factor=1.0,
+        requests_per_minute=10,
+        tokens_per_minute=100,
+    )
+
+    vector = service.embed_query("Can I have pets?")
+
+    assert len(vector) == 4
+    assert client.calls == [["Can I have pets?"]]
+    assert client.input_types == ["query"]

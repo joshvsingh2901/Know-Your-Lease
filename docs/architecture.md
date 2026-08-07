@@ -1,6 +1,6 @@
 # Architecture
 
-Stage 2 is a browser application, a FastAPI service with in-process ingestion, local development file storage, Voyage AI embeddings, and PostgreSQL + pgvector.
+Stage 4 is a browser application, a FastAPI service with in-process ingestion, local development file storage, Voyage AI embeddings, exact PostgreSQL + pgvector retrieval, Gemini grounded answer generation, verified citation snippets, and PDF source inspection. The Stage 1 upload boundary and Stage 2 indexing pipeline remain intact.
 
 ## Current system
 
@@ -22,14 +22,28 @@ Voyage AI (voyage-law-2)
 DocumentChunk records
   ↓
 PostgreSQL 18 + pgvector
+  ↑ exact document-scoped cosine search
+Voyage query embedding ← question ← Next.js question UI
+  ↓ selected lease excerpts only
+Gemini structured grounded generation
+  ↓ validated SOURCE_n identifiers and supporting quotes
+Backend verifies quotes against retrieval chunks
+  ↓ bounded deterministic fallback when needed
+Backend-owned page metadata and concise source snippets
+  ↓
+Answer, compact citation cards, and PDF page navigation
 ```
 
-- `frontend/` owns file selection, upload feedback, and polling. It stops polling when the document becomes `ready` or `failed`.
-- `backend/app/api/routes/documents.py` owns upload validation and the document/status/debug contracts.
+- `frontend/` owns file selection, upload feedback, polling, single-turn questions, a responsive side-by-side PDF viewer, answer display, and compact source cards. Citation interaction changes the viewer page and visibly selects the source card.
+- `backend/app/api/routes/documents.py` owns upload validation and the document, PDF, retrieval-debug, and question contracts.
 - `backend/app/services/storage.py` maps a document UUID to an internal `uploads/<uuid>.pdf` key. Original filenames are metadata only.
 - `backend/app/services/pdf_extraction.py`, `text_normalization.py`, and `chunking.py` form an inspectable preprocessing pipeline with no LLM or orchestration framework.
 - `backend/app/services/embeddings.py` batches document chunks, applies account-aware pacing and bounded transient retries, and validates Voyage output.
 - `backend/app/services/document_ingestion.py` owns status transitions and the final all-or-nothing chunk persistence transaction.
+- `backend/app/services/retrieval.py` performs exact cosine search with a mandatory `document_id` predicate, retrieves 10 candidates, and diversifies them to at most 5 results.
+- `backend/app/services/generation.py` isolates the official Google GenAI client, structured JSON response schema, grounding prompt, prompt-injection boundary, source-ID validation, abstention behavior, and one bounded retry for transient provider overload.
+- `backend/app/services/citation_snippets.py` validates model quotes against source chunks and provides bounded sentence-aware fallback snippets plus conservative heading detection.
+- `backend/app/services/question_answering.py` requires a ready document, coordinates query embedding, retrieval, generation, verified snippets, and backend citation mapping.
 - `backend/app/models/` contains `Document` and document-owned `DocumentChunk` records.
 - `backend/alembic/` is the only production schema mechanism; application startup does not create tables.
 
@@ -51,16 +65,51 @@ Delete any stale chunks → insert complete new index → status=ready
 
 Any extraction, embedding, or persistence failure removes chunk rows for that document and records `failed` plus a short safe message. A `ready` status therefore means that all chunk text, provenance, and vectors were persisted successfully.
 
+## Question lifecycle
+
+```text
+POST /documents/{document_id}/questions
+  ↓ validate UUID and a non-blank question of at most 1,000 characters
+Require Document(status=ready)
+  ↓
+Voyage voyage-law-2 embedding (input_type=query)
+  ↓
+SELECT chunk metadata and cosine distance
+WHERE DocumentChunk.document_id = requested document
+ORDER BY cosine distance ASC
+LIMIT 10
+  ↓
+Remove near-identical overlap; retain at most 5 distinct chunks
+  ↓ assign SOURCE_1 ... SOURCE_n
+Gemini JSON generation using only those excerpts
+  ↓ validate answer, source IDs, and supporting quotes
+Verify each quote occurs in its corresponding chunk
+  ↓ use deterministic bounded fallback if it does not
+Map source IDs to database-owned chunk IDs/pages/snippets/scores
+  ↓
+Return answer and citations
+```
+
+`POST /documents/{document_id}/retrieve` runs the same ready check, query embedding, exact search, and diversification but skips Gemini. It is a development diagnostic for separating retrieval quality from generation quality. Neither endpoint returns vector arrays.
+
 ## Persistence and isolation
 
-The original PDF remains in `backend/storage/uploads/` for future source viewing. API responses never expose its internal path. Each chunk has a required foreign key to exactly one document, and the foreign key cascades on document deletion. Stage 3 retrieval must always include a `document_id` filter; there is intentionally no global corpus search design.
+The original PDF remains in `backend/storage/uploads/` for future source viewing. API responses never expose its internal path. Each chunk has a required foreign key to exactly one document, and the foreign key cascades on document deletion. Retrieval includes a `document_id` SQL filter before ranking and applies a second defensive scope check in orchestration; there is intentionally no global corpus search design.
 
-The vector column has 1024 dimensions to match `voyage-law-2`. Stage 2 adds conventional document/page indexes and a unique per-document chunk order, but no ANN index. A normal lease contains few enough chunks that exact similarity search will be simpler and sufficiently fast when Stage 3 adds retrieval.
+The vector column has 1024 dimensions to match `voyage-law-2`. Conventional document/page indexes and a unique per-document chunk order support isolation and inspection. There is no ANN index: a normal lease contains few enough chunks that exact cosine distance is simpler and sufficiently fast.
+
+## Grounding and citation boundary
+
+Gemini receives only the final retrieved excerpts, never the complete lease or PDF. The system instruction treats both the question and lease excerpts as untrusted data, forbids outside legal knowledge and legal advice, and requires supplied `SOURCE_n` identifiers. The provider response is validated against a strict JSON schema. Unknown identifiers reject the response; duplicate valid identifiers are deduplicated; and a response with no source IDs is replaced by the fixed abstention answer.
+
+Page numbers, section titles, snippets, similarity scores, and chunk IDs are mapped from retrieval results in backend code. A model-provided quote is used only after whitespace-normalized containment validation against its matching chunk. It never controls page metadata, and an invalid quote is replaced by a local relevant-sentence fallback.
+
+`GET /documents/{document_id}/pdf` resolves only the document's already-owned storage key, confirms that the file exists, and serves it as `application/pdf` without exposing the internal path. At ready state, the frontend presents a two-column workspace on desktop: the PDF viewer on the left and the question/answer panel on the right. Citation actions jump the viewer to the cited page, then attempt a whitespace-normalized match against React-PDF's rendered text-layer spans. Only matching spans are highlighted; an imperfect match leaves the correct page visible without a fabricated highlight.
 
 ## Processing boundary
 
 FastAPI `BackgroundTasks` keeps the upload request responsive without adding Redis or a worker service. The embedding service is process-local and serializes provider calls so its 3 RPM / 10K TPM pacing applies across uploads handled by that process. This is an MVP execution model: a production deployment should move ingestion to a durable queue because in-flight work is lost if the API process restarts, and rate limiting would need coordination across multiple API processes.
 
-## Not implemented
+## Current limitations
 
-Stage 2 does not provide OCR, question embeddings, vector search, reranking, answer generation, chat history, or citations in generated answers. The chunks endpoint exists only to inspect the index during development.
+The current system does not provide OCR, authentication/user ownership, durable background jobs, cross-process rate limiting, chat history, query rewriting, reranking, hybrid/full-text retrieval, coordinate-level PDF highlights, or a calibrated relevance threshold. Text-layer highlighting is best-effort because PDFs can expose text with imperfect spacing. Abstention relies on evidence-limited prompting plus strict source-ID validation. The chunks and retrieval endpoints are development inspection surfaces and should be restricted before a production deployment.
