@@ -58,6 +58,14 @@ If Gemini returns no source IDs, any prose it generated is discarded and replace
 
 Reranking is deliberately deferred. Direct Voyage embeddings plus exact pgvector search should be evaluated first, and a reranker would add provider latency, cost, and rate-limit pressure. Hybrid/full-text retrieval is also deferred until evaluation demonstrates a concrete failure mode.
 
+## Stage 5 retrieval evaluation
+
+Stage 5 adds a repeatable 27-question, page-labeled evaluation dataset for the representative 34-page lease: 24 supported lease questions and three deliberately unsupported questions. `backend/scripts/evaluate_retrieval.py` uses the real document-scoped retrieval path but batches its independent Voyage query embeddings so an evaluation does not spend one request per question. It never invokes Gemini or mutates the document index.
+
+The first baseline achieved **Hit@1 91.7%, Hit@3 95.8%, Hit@5 100.0%, and average first relevant rank 1.17**. The two non-top-one supported cases were a page-3 NSF clause at rank 2 behind signature noise and a lease-specific late-rent clause at rank 4 behind broader rent material. Since every expected source appeared in the existing top five, the system remains **vector-only, exact cosine, candidate_k=10, final_k=5**. No hybrid search, reranker, threshold, or tuning was added merely to improve a benchmark number.
+
+Unsupported-query top scores averaged 0.228, but this overlaps weak supported evidence, so there is no defensible relevance cutoff yet. Keep conservative evidence-bound generation/abstention and revisit threshold calibration only with a larger multi-lease labeled set.
+
 ## Citation presentation and source inspection
 
 Retrieval chunks remain intentionally larger than user-facing citations. Larger chunks preserve clause context and retrieval quality; shrinking them merely to improve card readability would harm that boundary. Gemini now returns only the source IDs it used plus a short `quote` for each source. The backend normalizes whitespace and verifies that each quote is contained in its corresponding retrieval chunk. It never trusts a model quote that cannot be found in the chunk.

@@ -1,0 +1,32 @@
+{
+  "name": "representative-34-page-lease",
+  "cases": [
+    {"id": "pets-allow", "question": "Can I have pets?", "expected_pages": [13, 23], "expected_topic": "Pets"},
+    {"id": "pets-restrictions", "question": "What restrictions apply to pets?", "expected_pages": [13, 23], "expected_topic": "Pets"},
+    {"id": "pets-damage", "question": "What happens if my pet damages something?", "expected_pages": [13, 23], "expected_topic": "Pets"},
+    {"id": "rent-monthly", "question": "What is my monthly rent?", "expected_pages": [3], "expected_topic": "Rent"},
+    {"id": "fees", "question": "What extra fees should I know about?", "expected_pages": [3, 4, 5, 18, 21, 33], "expected_topic": "Rent and fees"},
+    {"id": "nsf", "question": "What happens if my cheque bounces?", "expected_pages": [3], "expected_topic": "NSF fee"},
+    {"id": "electricity-surcharge", "question": "Is there an electricity surcharge?", "expected_pages": [3], "expected_topic": "Utilities"},
+    {"id": "key-deposit", "question": "Is there a key deposit?", "expected_pages": [5], "expected_topic": "Key deposit"},
+    {"id": "late-rent", "question": "What happens if rent is late?", "expected_pages": [4, 31], "expected_topic": "Late rent"},
+    {"id": "utilities", "question": "Who pays utilities?", "expected_pages": [4, 31], "expected_topic": "Utilities"},
+    {"id": "internet", "question": "Is internet included?", "expected_pages": [3, 18, 21, 31], "expected_topic": "Internet"},
+    {"id": "sublet", "question": "Can I sublet?", "expected_pages": [12, 18], "expected_topic": "Sublet"},
+    {"id": "lease-takeover", "question": "Can someone else take over my lease?", "expected_pages": [12, 18], "expected_topic": "Assignment"},
+    {"id": "assign", "question": "Can I assign my lease?", "expected_pages": [12, 18], "expected_topic": "Assignment"},
+    {"id": "landlord-entry", "question": "When can the landlord enter?", "expected_pages": [12, 22], "expected_topic": "Landlord entry"},
+    {"id": "privacy", "question": "Can my landlord come into my room whenever they want?", "expected_pages": [12, 22], "expected_topic": "Landlord entry"},
+    {"id": "early-termination", "question": "Can I end my lease early?", "expected_pages": [8, 9, 18], "expected_topic": "Termination"},
+    {"id": "notice", "question": "How much notice do I need to leave?", "expected_pages": [8, 9], "expected_topic": "Termination"},
+    {"id": "insurance", "question": "Do I need tenant insurance?", "expected_pages": [5, 21, 33], "expected_topic": "Tenant insurance"},
+    {"id": "guests", "question": "Can I have guests?", "expected_pages": [13, 21], "expected_topic": "Guests"},
+    {"id": "locks", "question": "Can I change the locks?", "expected_pages": [12, 22], "expected_topic": "Locks"},
+    {"id": "modify", "question": "Can I modify the apartment?", "expected_pages": [5, 22], "expected_topic": "Changes and alterations"},
+    {"id": "damage", "question": "Who is responsible for damage?", "expected_pages": [9, 19, 22], "expected_topic": "Damage"},
+    {"id": "smoking", "question": "What are the smoking rules?", "expected_pages": [5, 13], "expected_topic": "Smoking"},
+    {"id": "negative-cabinets", "question": "What color are the kitchen cabinets?", "expected_pages": [], "expected_topic": "Unsupported"},
+    {"id": "negative-refrigerator", "question": "What brand is the refrigerator?", "expected_pages": [], "expected_topic": "Unsupported"},
+    {"id": "negative-pool", "question": "Does the unit have a swimming pool?", "expected_pages": [], "expected_topic": "Unsupported"}
+  ]
+}

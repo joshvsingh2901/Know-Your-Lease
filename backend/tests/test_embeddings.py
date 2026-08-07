@@ -228,3 +228,23 @@ def test_query_embedding_uses_query_input_type() -> None:
     assert len(vector) == 4
     assert client.calls == [["Can I have pets?"]]
     assert client.input_types == ["query"]
+
+
+def test_query_embeddings_batch_inputs_and_preserve_order() -> None:
+    client = RecordingClient()
+    service = VoyageEmbeddingService(
+        client=client,
+        dimensions=4,
+        batch_size=3,
+        batch_token_limit=10,
+        token_counter=lambda texts: [2 for _ in texts],
+        token_safety_factor=1.0,
+        requests_per_minute=10,
+        tokens_per_minute=100,
+    )
+
+    vectors = service.embed_queries(["pets", "fees", "entry", "sublet"])
+
+    assert client.calls == [["pets", "fees", "entry"], ["sublet"]]
+    assert client.input_types == ["query", "query"]
+    assert [vector[0] for vector in vectors] == [0.0, 1.0, 2.0, 3.0]

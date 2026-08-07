@@ -326,24 +326,49 @@ class VoyageEmbeddingService:
         return vectors
 
     def embed_query(self, question: str) -> list[float]:
-        normalized_question = question.strip()
-        if not normalized_question:
-            raise EmbeddingError("A non-empty question is required for query embedding.")
+        return self.embed_queries([question])[0]
 
-        estimated_tokens = max(1, len(normalized_question.split()) * 2)
-        budget_token_count = self._budget_token_counts(
-            [normalized_question],
-            [estimated_tokens],
-        )[0]
-        batch = _EmbeddingBatch([normalized_question], budget_token_count)
+    def embed_queries(self, questions: list[str]) -> list[list[float]]:
+        """Embed independent retrieval queries in provider-safe batches.
+
+        The question endpoint continues to call :meth:`embed_query`. Batch support
+        exists for offline evaluation, where sending many tiny queries separately
+        would needlessly consume the account's requests-per-minute budget.
+        """
+        normalized_questions = [question.strip() for question in questions]
+        if not normalized_questions or any(not question for question in normalized_questions):
+            raise EmbeddingError("Query embeddings require non-empty questions.")
+
+        estimated_tokens = [
+            max(1, len(question.split()) * 2) for question in normalized_questions
+        ]
+        budget_token_counts = self._budget_token_counts(
+            normalized_questions,
+            estimated_tokens,
+        )
+        batches = self._make_batches(normalized_questions, budget_token_counts)
+        vectors: list[list[float]] = []
         with self._request_lock:
-            vectors = self._embed_batch(batch, input_type="query")
+            for batch in batches:
+                batch_vectors = self._embed_batch(batch, input_type="query")
+                if len(batch_vectors) != len(batch.texts):
+                    raise EmbeddingError(
+                        "Voyage returned a different number of query vectors than inputs."
+                    )
+                if any(len(vector) != self.dimensions for vector in batch_vectors):
+                    raise EmbeddingError(
+                        "Voyage returned a query embedding with dimensions other than "
+                        f"{self.dimensions}."
+                    )
+                vectors.extend(batch_vectors)
 
-        if len(vectors) != 1 or len(vectors[0]) != self.dimensions:
+        if len(vectors) != len(normalized_questions) or any(
+            len(vector) != self.dimensions for vector in vectors
+        ):
             raise EmbeddingError(
                 "Voyage returned an invalid query embedding shape."
             )
-        return vectors[0]
+        return vectors
 
 
 @lru_cache(maxsize=1)
