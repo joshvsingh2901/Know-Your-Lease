@@ -1,40 +1,38 @@
 # Know Your Lease
 
-Know Your Lease is a legal document assistant that will answer questions using only a user's uploaded lease and cite the exact supporting clauses. Stage 1 provides the working application foundation: PDF upload transport, metadata persistence, and a polished web interface. It intentionally does not parse or analyze the lease yet.
+Know Your Lease is a portfolio-quality legal document assistant. Stage 2 accepts a lease PDF, retains it safely, extracts page-aware text, creates retrieval chunks, embeds them with Voyage AI, and stores the resulting index in PostgreSQL with pgvector. Question answering begins in Stage 3.
 
 ## Technology stack
 
 - **Frontend:** Next.js, React, TypeScript, Tailwind CSS
 - **Backend:** FastAPI, Pydantic, SQLAlchemy, Alembic
+- **Ingestion:** PyMuPDF, a local paragraph/sentence-aware chunker, Voyage AI
 - **Database:** PostgreSQL 18 with pgvector
 - **Local infrastructure:** Docker Compose
 
 ## Repository structure
 
 ```text
-frontend/                 Next.js application and upload UI
-  app/                    App Router pages and global styles
-  components/             Interactive UI components
-  lib/                    Central API client
-  types/                  Shared frontend data types
+frontend/                    Next.js upload and processing-status UI
 backend/
-  app/api/routes/         FastAPI endpoints
-  app/core/               Environment settings and database session
-  app/models/             SQLAlchemy entities
-  app/schemas/            Pydantic response contracts
-  alembic/                Database migrations
-  tests/                  Backend API and persistence tests
-docs/                     Architecture and project-specific RAG decisions
-docker-compose.yml        PostgreSQL + pgvector service
+  app/api/routes/            Upload, status, and chunk-inspection endpoints
+  app/models/                Document and DocumentChunk entities
+  app/services/              Storage, extraction, chunking, embeddings, ingestion
+  alembic/                   Database migrations
+  scripts/test_ingestion.py  Optional real Voyage smoke test
+  storage/uploads/           Ignored local PDF storage
+  tests/                     Mocked, offline automated tests
+docs/                        Architecture and RAG decision record
 ```
 
 ## Prerequisites
 
-- Python 3.11 or newer
-- Node.js 20.19+, 22.13+, or 24+ (an active LTS release is recommended)
+- Python 3.11+
+- Node.js 20.19+, 22.13+, or 24+
 - Docker Desktop or another Docker Engine with Compose
+- A Voyage AI API key for real document indexing
 
-## Environment setup
+## Setup
 
 From the repository root:
 
@@ -51,34 +49,32 @@ npm install
 cd ..
 ```
 
-The included defaults are for local development only. `OPENAI_API_KEY` is reserved for a later stage and may remain empty.
+Set these values in `backend/.env`:
+
+```dotenv
+VOYAGE_API_KEY=your-key-here
+VOYAGE_EMBEDDING_MODEL=voyage-law-2
+```
+
+`OPENAI_API_KEY` remains reserved for a later answer-generation stage. It is not used for Stage 2. Real `.env` files and `backend/storage/uploads/` are ignored by Git.
 
 ## Run locally
 
-Start PostgreSQL and wait for it to become healthy:
+Start PostgreSQL and apply the migrations:
 
 ```bash
 docker compose up -d database
 docker compose ps
-```
-
-The database is exposed on host port `5433` by default to avoid clashing with a system PostgreSQL installation. Set `POSTGRES_PORT` and update `backend/.env` if you prefer another port.
-
-Apply the schema migration:
-
-```bash
 cd backend
 source .venv/bin/activate
 alembic upgrade head
 ```
 
-Start FastAPI in that terminal:
+Start FastAPI:
 
 ```bash
 uvicorn app.main:app --reload --port 8000
 ```
-
-The API is available at `http://localhost:8000`, with interactive documentation at `http://localhost:8000/docs`.
 
 In another terminal, start Next.js:
 
@@ -87,80 +83,68 @@ cd frontend
 npm run dev
 ```
 
-Open `http://localhost:3000` and upload a PDF lease.
+Open `http://localhost:3000`. If port 3000 is occupied, use `npm run dev:3001`; both explicit local origins are permitted in development.
 
-The default command explicitly requires port `3000` so Next.js cannot silently move to a CORS-incompatible origin. If another local project must keep port `3000`, use `npm run dev:3001`; that explicit development origin is also allowed by the backend.
+## Upload and indexing lifecycle
+
+```text
+POST PDF
+  → validate and store under backend/storage/uploads/<document-id>.pdf
+  → uploaded
+  → background processing
+  → page-aware extraction and normalization
+  → page-scoped chunks
+  → batched Voyage embeddings
+  → PostgreSQL DocumentChunk rows with pgvector vectors
+  → ready (or failed with a safe error message)
+```
+
+The frontend polls document status until `ready` or `failed`. PDFs with little or no extractable text fail clearly because OCR is not implemented yet.
 
 ## API
 
-### `GET /health`
+- `GET /health` — service health.
+- `POST /documents` — validate/store a PDF, create its record, and enqueue in-process ingestion.
+- `GET /documents/{document_id}` — current `uploaded | processing | ready | failed` state.
+- `GET /documents/{document_id}/chunks?limit=50&offset=0` — paginated development inspection of chunk text and provenance; embeddings are intentionally omitted.
 
-Returns `{ "status": "ok" }` without requiring the database.
+Example inspection after an upload:
 
-### `POST /documents`
-
-Accepts one `file` field as `multipart/form-data`. The API validates a `.pdf` filename, PDF media type, `%PDF-` file signature, and the configured size limit. It creates a `documents` metadata record and returns:
-
-```json
-{
-  "id": "uuid",
-  "filename": "lease.pdf",
-  "status": "uploaded",
-  "created_at": "2026-08-06T12:00:00Z"
-}
+```bash
+curl http://localhost:8000/documents/DOCUMENT_ID
+curl 'http://localhost:8000/documents/DOCUMENT_ID/chunks?limit=10'
 ```
 
-The raw PDF is not permanently saved in Stage 1.
+## Optional real Voyage ingestion test
 
-## Verification
-
-Run backend tests and static checks:
+After the database is running, migrations are current, and `VOYAGE_API_KEY` is set:
 
 ```bash
 cd backend
 source .venv/bin/activate
-pytest
-ruff check .
-alembic check
+python scripts/test_ingestion.py /absolute/path/to/small-digital-lease.pdf
 ```
 
-Run frontend checks:
+The command makes real Voyage calls, respects the configured 3 RPM / 10,000 TPM limits, and reports the document ID, final status, chunk count, and page numbers. It is never run by the automated test suite.
+
+## Verification
 
 ```bash
-cd frontend
+cd backend
+source .venv/bin/activate
+ruff check .
+pytest -q
+alembic upgrade head
+alembic check
+python -c "from app.main import app; print(app.version)"
+
+cd ../frontend
 npm run lint
 npm run typecheck
 npm run build
-```
 
-Validate infrastructure configuration:
-
-```bash
+cd ..
 docker compose config --quiet
 ```
 
-## Current features
-
-- Responsive, accessible PDF selection and drag-and-drop UI
-- Loading, success, and human-readable error states
-- Centralized frontend API client
-- Basic PDF extension, media-type, magic-byte, and size validation
-- UUID document metadata persisted through SQLAlchemy
-- Alembic-managed schema and pgvector extension setup
-- Explicit local CORS configuration
-- Isolated tests that do not require OpenAI or external services
-
-## Planned RAG pipeline
-
-```text
-PDF extraction
-  → page-aware text
-  → chunking and source metadata
-  → embeddings
-  → pgvector storage
-  → document-scoped retrieval
-  → grounded answer generation
-  → page and section citations
-```
-
-See [the architecture](docs/architecture.md) and [application RAG decisions](docs/rag-decisions.md) for the reasoning behind the current design.
+See [the architecture](docs/architecture.md) and [the RAG decisions](docs/rag-decisions.md) for the implemented design and its current tradeoffs.

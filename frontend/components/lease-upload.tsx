@@ -1,8 +1,8 @@
 "use client";
 
-import { ChangeEvent, DragEvent, useRef, useState } from "react";
+import { ChangeEvent, DragEvent, useEffect, useRef, useState } from "react";
 
-import { ApiError, uploadDocument } from "@/lib/api";
+import { ApiError, getDocument, uploadDocument } from "@/lib/api";
 import type { UploadedDocument } from "@/types/document";
 
 const MAX_FILE_SIZE = 20 * 1024 * 1024;
@@ -28,6 +28,44 @@ export function LeaseUpload() {
   const [isUploading, setIsUploading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [document, setDocument] = useState<UploadedDocument | null>(null);
+  const documentId = document?.id;
+
+  useEffect(() => {
+    if (!documentId) return;
+
+    const controller = new AbortController();
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+    let failures = 0;
+
+    async function pollStatus() {
+      try {
+        const latest = await getDocument(documentId!, controller.signal);
+        failures = 0;
+        setDocument(latest);
+        if (latest.status !== "ready" && latest.status !== "failed") {
+          timeout = setTimeout(pollStatus, 1500);
+        }
+      } catch (pollError) {
+        if (controller.signal.aborted) return;
+        failures += 1;
+        if (failures < 3) {
+          timeout = setTimeout(pollStatus, 2000);
+        } else {
+          setError(
+            pollError instanceof ApiError
+              ? pollError.message
+              : "Document processing status could not be checked.",
+          );
+        }
+      }
+    }
+
+    timeout = setTimeout(pollStatus, 500);
+    return () => {
+      controller.abort();
+      if (timeout) clearTimeout(timeout);
+    };
+  }, [documentId]);
 
   function chooseFile(nextFile: File | undefined) {
     if (!nextFile) return;
@@ -77,7 +115,7 @@ export function LeaseUpload() {
             <p className="mt-0.5 text-sm text-[var(--muted)]">PDF only · up to 20 MB</p>
           </div>
           <span className="rounded-full border border-[var(--line)] bg-[var(--paper)] px-3 py-1 font-mono text-[10px] uppercase tracking-wider text-[var(--muted)]">
-            Stage 1
+            Stage 2
           </span>
         </div>
 
@@ -139,13 +177,42 @@ export function LeaseUpload() {
               )}
             </>
           ) : (
-            <div className="rounded-xl border border-[#b9d8c3] bg-[var(--success-bg)] p-5 sm:p-6">
+            <div className={`rounded-xl border p-5 sm:p-6 ${
+              document.status === "failed"
+                ? "border-[#ebc4bf] bg-[var(--error-bg)]"
+                : document.status === "ready"
+                  ? "border-[#b9d8c3] bg-[var(--success-bg)]"
+                  : "border-[#c9d3d8] bg-[#f1f5f6]"
+            }`}>
               <div className="flex items-start gap-4">
-                <span className="grid size-10 shrink-0 place-items-center rounded-full bg-[var(--success)] text-white" aria-hidden="true">
-                  <svg viewBox="0 0 24 24" fill="none" className="size-5" stroke="currentColor" strokeWidth="2"><path d="m6 12 4 4 8-9" strokeLinecap="round" strokeLinejoin="round" /></svg>
+                <span className={`grid size-10 shrink-0 place-items-center rounded-full text-white ${
+                  document.status === "failed"
+                    ? "bg-[var(--error)]"
+                    : document.status === "ready"
+                      ? "bg-[var(--success)]"
+                      : "bg-[var(--navy)]"
+                }`} aria-hidden="true">
+                  {document.status === "ready" ? (
+                    <svg viewBox="0 0 24 24" fill="none" className="size-5" stroke="currentColor" strokeWidth="2"><path d="m6 12 4 4 8-9" strokeLinecap="round" strokeLinejoin="round" /></svg>
+                  ) : document.status === "failed" ? (
+                    <span className="text-lg font-semibold">!</span>
+                  ) : (
+                    <span className="size-5 animate-spin rounded-full border-2 border-white/35 border-t-white" />
+                  )}
                 </span>
                 <div className="min-w-0 flex-1">
-                  <p className="font-semibold text-[var(--success)]">Lease uploaded</p>
+                  <p className={`font-semibold ${
+                    document.status === "failed"
+                      ? "text-[var(--error)]"
+                      : document.status === "ready"
+                        ? "text-[var(--success)]"
+                        : "text-[var(--navy)]"
+                  }`}>
+                    {document.status === "uploaded" && "Lease uploaded"}
+                    {document.status === "processing" && "Processing your lease"}
+                    {document.status === "ready" && "Lease ready"}
+                    {document.status === "failed" && "Processing failed"}
+                  </p>
                   <p className="mt-1 truncate text-sm font-medium text-[var(--navy)]">{document.filename}</p>
                   <dl className="mt-4 grid gap-3 text-xs sm:grid-cols-2">
                     <div><dt className="text-[var(--muted)]">Document ID</dt><dd className="mt-1 break-all font-mono text-[var(--ink)]">{document.id}</dd></div>
@@ -153,9 +220,16 @@ export function LeaseUpload() {
                   </dl>
                 </div>
               </div>
-              <div className="mt-5 border-t border-[#cfe3d5] pt-4">
-                <p className="text-sm leading-6 text-[var(--muted)]">Your lease is uploaded. Document indexing and questions will be enabled in the next build stage.</p>
-                <button type="button" onClick={reset} className="mt-3 text-sm font-semibold text-[var(--success)] underline decoration-[#9ac4a7] underline-offset-4">Upload another lease</button>
+              <div className="mt-5 border-t border-current/10 pt-4">
+                <p className="text-sm leading-6 text-[var(--muted)]">
+                  {document.status === "uploaded" && "Upload complete. Document processing will begin shortly."}
+                  {document.status === "processing" && "Extracting clauses and creating the document index…"}
+                  {document.status === "ready" && "Your lease is indexed and ready for questions."}
+                  {document.status === "failed" && (document.error_message ?? "This lease could not be indexed. Please try another PDF.")}
+                </p>
+                <button type="button" onClick={reset} className={`mt-3 text-sm font-semibold underline underline-offset-4 ${
+                  document.status === "failed" ? "text-[var(--error)]" : "text-[var(--success)]"
+                }`}>Upload another lease</button>
               </div>
             </div>
           )}
@@ -167,7 +241,12 @@ export function LeaseUpload() {
       </div>
 
       <div className="mt-5 rounded-xl border border-[var(--line)] bg-[#efede6] px-5 py-4 text-sm text-[var(--muted)]">
-        <p><span className="font-semibold text-[var(--navy)]">Questions are coming next.</span> This build securely transports the PDF metadata; it does not yet read or analyze lease contents.</p>
+        <p>
+          <span className="font-semibold text-[var(--navy)]">
+            {document?.status === "ready" ? "Your document index is ready." : "Questions are coming next."}
+          </span>{" "}
+          Stage 3 will add document-scoped questions and source-linked answers.
+        </p>
       </div>
     </section>
   );

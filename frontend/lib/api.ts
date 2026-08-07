@@ -45,3 +45,34 @@ export async function uploadDocument(file: File): Promise<UploadedDocument> {
 
   return (await response.json()) as UploadedDocument;
 }
+
+export async function getDocument(
+  documentId: string,
+  signal?: AbortSignal,
+): Promise<UploadedDocument> {
+  let response: Response;
+  try {
+    response = await fetch(`${API_BASE_URL}/documents/${encodeURIComponent(documentId)}`, {
+      method: "GET",
+      signal,
+      cache: "no-store",
+    });
+  } catch (error) {
+    if (error instanceof DOMException && error.name === "AbortError") throw error;
+    throw new ApiError(
+      `Could not check document status at ${API_BASE_URL}. The backend may be unavailable.`,
+    );
+  }
+
+  if (!response.ok) {
+    let message = "Document status could not be loaded.";
+    try {
+      const error = (await response.json()) as { detail?: string };
+      if (error.detail) message = error.detail;
+    } catch {
+      // Keep the safe fallback when the API does not return JSON.
+    }
+    throw new ApiError(message, response.status);
+  }
+  return (await response.json()) as UploadedDocument;
+}

@@ -18,6 +18,23 @@ class Settings(BaseSettings):
         "http://localhost:3001,http://127.0.0.1:3000,http://127.0.0.1:3001"
     )
     max_upload_size_mb: int = 20
+    storage_root: Path = BACKEND_DIR / "storage"
+    minimum_extractable_characters: int = 50
+    chunk_target_tokens: int = 600
+    chunk_max_tokens: int = 750
+    chunk_overlap_tokens: int = 75
+    chunk_min_tokens: int = 120
+    voyage_api_key: str | None = None
+    voyage_embedding_model: str = "voyage-law-2"
+    voyage_embedding_dimensions: int = 1024
+    voyage_requests_per_minute: int = 3
+    voyage_tokens_per_minute: int = 10_000
+    voyage_batch_token_limit: int = 9_500
+    voyage_batch_size: int = 128
+    voyage_token_safety_factor: float = 1.1
+    voyage_estimate_fallback_multiplier: float = 2.5
+    voyage_max_retries: int = 2
+    voyage_retry_base_seconds: float = 2.0
 
     model_config = SettingsConfigDict(
         env_file=BACKEND_DIR / ".env",

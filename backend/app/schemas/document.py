@@ -13,3 +13,24 @@ class DocumentResponse(BaseModel):
     filename: str = Field(validation_alias="original_filename")
     status: DocumentStatus
     created_at: datetime
+    updated_at: datetime
+    error_message: str | None
+
+
+class DocumentChunkResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    chunk_index: int
+    page_number: int
+    paragraph_index: int | None
+    section_title: str | None
+    token_count: int
+    text: str
+
+
+class DocumentChunkListResponse(BaseModel):
+    items: list[DocumentChunkResponse]
+    total: int
+    limit: int
+    offset: int

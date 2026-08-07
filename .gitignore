@@ -13,6 +13,7 @@ __pycache__/
 venv/
 htmlcov/
 .coverage
+/backend/storage/uploads/
 
 # Node / Next.js
 node_modules/

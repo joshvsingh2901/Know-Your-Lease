@@ -1,61 +1,66 @@
 # Architecture
 
-Know Your Lease is split into a browser application, an HTTP API, and a relational database. Stage 1 deliberately ends at validated upload transport and metadata persistence; the PDF bytes are not retained or analyzed.
+Stage 2 is a browser application, a FastAPI service with in-process ingestion, local development file storage, Voyage AI embeddings, and PostgreSQL + pgvector.
 
 ## Current system
 
 ```text
-Browser
-  ↓ multipart PDF upload
-Next.js + TypeScript + Tailwind CSS
-  ↓ HTTP
-FastAPI + Pydantic
-  ↓ SQLAlchemy
+Browser / Next.js
+  ↓ multipart PDF
+FastAPI upload endpoint
+  ↓
+Safe local PDF storage
+  ↓ FastAPI BackgroundTasks
+PyMuPDF page extraction
+  ↓
+Conservative normalization
+  ↓
+Page-scoped paragraph/sentence chunking
+  ↓ batches using input_type=document
+Voyage AI (voyage-law-2)
+  ↓ 1024-dimensional vectors
+DocumentChunk records
+  ↓
 PostgreSQL 18 + pgvector
 ```
 
-- `frontend/` owns presentation, local file selection, client-side feedback, and calls to the API through one small client module.
-- `backend/app/api/` owns the HTTP contract. The upload endpoint validates the filename, media type, PDF magic bytes, and size before creating metadata.
-- `backend/app/models/` owns persisted entities. Stage 1 has only `documents`.
-- `backend/alembic/` is the sole production schema migration mechanism. Application startup does not call `create_all()`.
-- PostgreSQL runs locally through Docker Compose. The first migration enables the `vector` extension so the database is ready for later embedding storage.
+- `frontend/` owns file selection, upload feedback, and polling. It stops polling when the document becomes `ready` or `failed`.
+- `backend/app/api/routes/documents.py` owns upload validation and the document/status/debug contracts.
+- `backend/app/services/storage.py` maps a document UUID to an internal `uploads/<uuid>.pdf` key. Original filenames are metadata only.
+- `backend/app/services/pdf_extraction.py`, `text_normalization.py`, and `chunking.py` form an inspectable preprocessing pipeline with no LLM or orchestration framework.
+- `backend/app/services/embeddings.py` batches document chunks, applies account-aware pacing and bounded transient retries, and validates Voyage output.
+- `backend/app/services/document_ingestion.py` owns status transitions and the final all-or-nothing chunk persistence transaction.
+- `backend/app/models/` contains `Document` and document-owned `DocumentChunk` records.
+- `backend/alembic/` is the only production schema mechanism; application startup does not create tables.
 
-The frontend and backend are separate development processes. CORS permits the configured frontend origin only (`http://localhost:3000` by default), rather than every origin.
-
-## Upload request lifecycle
+## Request and processing lifecycle
 
 ```text
-Select or drop PDF
-  ↓
 POST /documents
+  ↓ validate filename, media type, %PDF- signature, and size
+Persist bytes atomically under a UUID storage key
   ↓
-Validate extension + media type + %PDF- signature + size
+Insert Document(status=uploaded)
+  ↓ return 201 and schedule background task
+Document(status=processing)
   ↓
-Insert Document metadata
-  ↓
-Return UUID, filename, status, and creation time
+Extract pages → normalize → chunk → embed
+  ↓ one database transaction
+Delete any stale chunks → insert complete new index → status=ready
 ```
 
-The uploaded file is closed after validation and is not written to application storage. This minimizes data handling until the ingestion lifecycle is designed in Stage 2.
+Any extraction, embedding, or persistence failure removes chunk rows for that document and records `failed` plus a short safe message. A `ready` status therefore means that all chunk text, provenance, and vectors were persisted successfully.
 
-## Planned RAG flow
+## Persistence and isolation
 
-```text
-PDF
-  ↓
-Page-aware text extraction
-  ↓
-Chunking + source metadata
-  ↓
-Embeddings
-  ↓
-PostgreSQL + pgvector
-  ↓ document-scoped retrieval
-Relevant lease passages
-  ↓
-Grounded LLM generation
-  ↓
-Answer + page/section citations
-```
+The original PDF remains in `backend/storage/uploads/` for future source viewing. API responses never expose its internal path. Each chunk has a required foreign key to exactly one document, and the foreign key cascades on document deletion. Stage 3 retrieval must always include a `document_id` filter; there is intentionally no global corpus search design.
 
-Stage 2 will add a processing lifecycle and `document_chunks` storage. The API, model, and service boundaries are intentionally small so those additions can be made without replacing the Stage 1 foundation.
+The vector column has 1024 dimensions to match `voyage-law-2`. Stage 2 adds conventional document/page indexes and a unique per-document chunk order, but no ANN index. A normal lease contains few enough chunks that exact similarity search will be simpler and sufficiently fast when Stage 3 adds retrieval.
+
+## Processing boundary
+
+FastAPI `BackgroundTasks` keeps the upload request responsive without adding Redis or a worker service. The embedding service is process-local and serializes provider calls so its 3 RPM / 10K TPM pacing applies across uploads handled by that process. This is an MVP execution model: a production deployment should move ingestion to a durable queue because in-flight work is lost if the API process restarts, and rate limiting would need coordination across multiple API processes.
+
+## Not implemented
+
+Stage 2 does not provide OCR, question embeddings, vector search, reranking, answer generation, chat history, or citations in generated answers. The chunks endpoint exists only to inspect the index during development.

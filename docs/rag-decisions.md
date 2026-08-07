@@ -1,51 +1,45 @@
 # RAG Decisions
 
-This log records decisions made specifically for Know Your Lease. Items marked TBD are intentionally unresolved until the stage where they can be evaluated with real lease documents.
+This file records the concrete Stage 2 choices for Know Your Lease.
 
-## PostgreSQL + pgvector is the vector store
+## Extraction and source fidelity
 
-**Chosen:** Keep document metadata, future chunks, source metadata, and embeddings in PostgreSQL, with pgvector providing vector search.
+**PyMuPDF** extracts sorted text blocks page by page. Page numbers are stored starting at 1, empty pages remain represented during extraction, and normalization only fixes line endings, horizontal whitespace, and repeated blank lines. Legal text is not summarized or paraphrased.
 
-**Why:** Document ownership filters and vector retrieval can share one transactionally consistent datastore. The project already needs relational metadata, and the expected portfolio-scale workload does not justify another database service.
+Chunks do not cross page boundaries. This can leave a smaller final chunk on a page, but it gives every chunk one unambiguous `page_number` for later citations. `paragraph_index` is populated from detected blank-line boundaries; `section_title` remains nullable because the current deterministic parser cannot identify headings reliably enough to claim them.
 
-**Alternative considered:** A dedicated vector database. It adds operational complexity without a demonstrated Stage 1 requirement and can be revisited if scale or retrieval features demand it.
+Image-only/scanned documents with fewer than 50 non-whitespace extracted characters fail with an OCR-specific message. OCR is a future extraction implementation, not a reason to weaken source provenance now.
 
-## Retrieval will always be scoped to one document ID
+## Chunking
 
-**Chosen:** Every future chunk retrieval query must filter by the uploaded `document_id` before content is supplied to answer generation.
+The local chunker builds units from paragraphs, then sentence boundaries, and only falls back to word boundaries for an oversized sentence. It targets **600 estimated tokens**, enforces a **750-token maximum**, uses a **75-token sentence-unit overlap**, and avoids flushing below **120 tokens** when possible.
 
-**Why:** The product promise is to answer from the lease the user is viewing. Cross-document retrieval would create both grounding errors and a data-isolation risk.
+Token size is a conservative lexical estimate with a small multiplier rather than a provider tokenizer dependency. Final counts are useful operational estimates, not billing-authoritative token counts. This keeps preprocessing transparent and avoids adding an orchestration framework.
 
-**Can change later:** A deliberate multi-document comparison mode could accept an explicit allow-list of document IDs; unscoped retrieval should still never be used.
+## Embeddings
 
-## Page-aware source metadata will be preserved
+- Provider: **Voyage AI**
+- Model: **`voyage-law-2`**
+- Dimensions: **1024**
+- Stored chunk input type: **`document`**
+- Stage 3 question input type: **`query`** (not implemented yet)
 
-**Chosen:** Stage 2 extraction and chunking must retain page number and section information when available, alongside the exact source text.
+Chunks are counted with Voyage's model tokenizer and batched in original order, with at most 128 inputs and 9,500 safety-adjusted tokens per request. Because the safety-adjusted value includes 10% headroom, a full batch represents at most about 8,636 provider tokens and remains below the 10K TPM ceiling. A conservative 2.5× estimate is used only if the tokenizer is unavailable. Returned count, order alignment, and 1024-dimensional shape are validated before persistence. The process-local service serializes embedding work and applies a rolling 60-second window to every initial/retry request against the configured **3 requests/minute and 10,000 tokens/minute** limits. Provider `Retry-After` is honored, and transient 429/5xx/timeout failures receive at most two retries.
 
-**Why:** The UI must show verifiable citations and later jump to the relevant place in the lease. Reconstructing page provenance after chunking is unreliable.
+The official Voyage client is pinned below 0.3 because that compatible API supports `voyage-law-2`, `input_type`, and truncation control without pulling an unused LangChain stack. No LangChain or LlamaIndex code is used.
 
-**Alternative considered:** Store only chunk text. Rejected because it cannot support the citation experience promised by the product.
+## Vector persistence and retrieval scope
 
-## Generated answers will be lease-grounded
+PostgreSQL + pgvector stores relational metadata and vectors together. `DocumentChunk.embedding` is `vector(1024)`. Every chunk has a required `document_id`, and `(document_id, chunk_index)` is unique. Indexes on `document_id` and `(document_id, page_number)` support isolation and inspection.
 
-**Chosen:** The future answer model may use only passages retrieved from the selected lease and must decline when the retrieved evidence is insufficient.
+There is no ANN index yet. Typical leases produce tens of chunks, so exact vector distance over one document will be the clearest correct Stage 3 baseline. An HNSW/IVFFlat index should only be added after corpus size and measured latency justify it.
 
-**Why:** This is a document assistant, not a general legal advice system. Traceability is more important than producing an answer for every question.
+All future retrieval must filter by the selected `document_id`. Unscoped cross-document retrieval would violate both the product contract and data isolation.
 
-**Can change later:** General explanatory context could be added as a separately labeled mode, never presented as lease content.
+## Storage, atomicity, and execution
 
-## Raw PDF retention is deferred
+Development PDFs are written atomically to `backend/storage/uploads/<document-uuid>.pdf`; the original filename is stored separately and never used as a path. `DocumentStorage` isolates this policy so object storage can replace it later.
 
-**Chosen:** Stage 1 validates the upload stream and stores metadata only; it does not persist the PDF bytes.
+FastAPI schedules ingestion with an in-process background task. Chunks are inserted only after extraction, chunking, and all embeddings succeed. The final transaction removes stale chunks, inserts the full replacement index, and marks the document `ready`; failures remove chunks and mark it `failed` with a safe message.
 
-**Why:** No current feature needs retained bytes, and avoiding storage keeps data handling minimal. Stage 2 will choose a local/object storage lifecycle together with extraction jobs.
-
-**Alternative considered:** Save uploads on the API filesystem. Rejected for now because it is fragile across deployments and would pre-empt the storage/privacy design.
-
-## Decisions deferred to Stage 2
-
-- PDF extraction library and handling of image-only leases: **TBD**
-- Chunk boundaries, target size, and overlap: **TBD**, to be tested on representative leases
-- Embedding model and vector dimensions: **TBD**, based on retrieval evaluation and cost
-- Exact vs. approximate pgvector index strategy: **TBD**, after corpus size and latency are measured
-- Hybrid retrieval and reranking: **TBD**, only if baseline semantic retrieval evaluation shows a need
+This is appropriate for the portfolio MVP but not durable: a process crash can interrupt an in-flight job. A production version should use a durable worker queue and cross-process rate limiter.
