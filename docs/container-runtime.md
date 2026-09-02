@@ -45,8 +45,9 @@ Configuration is supplied only at runtime. No `.env` file or secret is copied in
 - `FRONTEND_ORIGIN` as the exact public HTTPS frontend origin
 - `VOYAGE_API_KEY` and `GEMINI_API_KEY`
 - `DEBUG_ENDPOINTS_ENABLED=false`
+- explicit `DOCUMENT_STORAGE_BACKEND=local|s3`
 
-`PDF_STORAGE_DIR` selects the writable PDF root (the image default resolves to `/app/storage`), and `PORT` selects the listening port. Model names, upload limits, provider pacing, answer-cache version, and the other existing settings remain environment-configurable. Development and tests may omit provider keys when calls are mocked or those features are unused.
+`DOCUMENT_STORAGE_BACKEND=local` uses `PDF_STORAGE_DIR` as the writable PDF root (the image default resolves to `/app/storage`). `DOCUMENT_STORAGE_BACKEND=s3` instead requires `S3_BUCKET_NAME` and `AWS_REGION`; boto3 resolves credentials at runtime, so none are copied into the image. `PORT`, model names, upload limits, provider pacing, answer-cache version, and the other existing settings remain environment-configurable. Development and tests may omit provider keys when calls are mocked or those features are unused.
 
 The runtime user is the unprivileged numeric UID/GID `10001:10001`. Only `/app/storage` is prepared as application-writable; application code and dependencies remain read-only to that user. Mount a volume at the configured storage path when PDFs must survive container replacement.
 

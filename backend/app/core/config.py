@@ -1,5 +1,6 @@
 from functools import lru_cache
 from pathlib import Path
+from typing import Literal
 from urllib.parse import urlsplit
 
 from pydantic import Field, SecretStr, computed_field, field_validator
@@ -23,7 +24,10 @@ class Settings(BaseSettings):
         "http://localhost:3001,http://127.0.0.1:3000,http://127.0.0.1:3001"
     )
     max_upload_size_mb: int = Field(default=20, gt=0, le=1_024)
+    document_storage_backend: Literal["local", "s3"] = "local"
     pdf_storage_dir: Path = BACKEND_DIR / "storage"
+    s3_bucket_name: str | None = None
+    aws_region: str | None = None
     minimum_extractable_characters: int = 50
     chunk_target_tokens: int = 600
     chunk_max_tokens: int = 750
@@ -68,6 +72,21 @@ class Settings(BaseSettings):
         if not value.get_secret_value().strip():
             raise ValueError("DATABASE_URL must not be blank.")
         return value
+
+    @field_validator("document_storage_backend", mode="before")
+    @classmethod
+    def normalize_document_storage_backend(cls, value: object) -> object:
+        if isinstance(value, str):
+            return value.strip().casefold()
+        return value
+
+    @field_validator("s3_bucket_name", "aws_region")
+    @classmethod
+    def normalize_optional_storage_setting(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = value.strip()
+        return normalized or None
 
     @computed_field
     @property
@@ -137,12 +156,17 @@ def validate_runtime_settings(config: Settings) -> None:
         origins = []
         problems.append(str(exc))
 
-    frontend_public = (PROJECT_DIR / "frontend" / "public").resolve()
-    storage_root = config.pdf_storage_dir.resolve()
-    if storage_root == frontend_public or frontend_public in storage_root.parents:
-        problems.append("PDF_STORAGE_DIR must not be inside frontend/public.")
+    if config.document_storage_backend == "local":
+        frontend_public = (PROJECT_DIR / "frontend" / "public").resolve()
+        storage_root = config.pdf_storage_dir.resolve()
+        if storage_root == frontend_public or frontend_public in storage_root.parents:
+            problems.append("PDF_STORAGE_DIR must not be inside frontend/public.")
+    elif not config.s3_bucket_name or not config.aws_region:
+        problems.append("S3 storage requires S3_BUCKET_NAME and AWS_REGION to be set.")
 
     if config.environment == "production":
+        if "document_storage_backend" not in config.model_fields_set:
+            problems.append("Production DOCUMENT_STORAGE_BACKEND must be set explicitly.")
         primary_origin = origins[0] if origins else ""
         parsed_origin = urlsplit(primary_origin) if primary_origin else None
         hostname = parsed_origin.hostname if parsed_origin else None

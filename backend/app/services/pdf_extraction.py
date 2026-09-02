@@ -21,7 +21,7 @@ class ExtractedPage:
 
 
 def extract_pdf_pages(
-    path: Path,
+    source: Path | bytes,
     minimum_characters: int | None = None,
 ) -> list[ExtractedPage]:
     minimum = (
@@ -30,7 +30,11 @@ def extract_pdf_pages(
         else minimum_characters
     )
     try:
-        with pymupdf.open(path) as pdf:
+        if isinstance(source, bytes):
+            pdf_document = pymupdf.open(stream=source, filetype="pdf")
+        else:
+            pdf_document = pymupdf.open(source)
+        with pdf_document as pdf:
             if pdf.page_count == 0:
                 raise PDFExtractionError("The PDF contains no pages.")
 

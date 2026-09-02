@@ -14,7 +14,11 @@ from app.api.dependencies import get_db
 from app.core.database import Base
 from app.main import app
 from app.services.document_ingestion import get_ingestion_service
-from app.services.storage import DocumentStorage, get_document_storage
+from app.services.storage import (
+    DocumentStorage,
+    LocalDocumentStorage,
+    get_document_storage,
+)
 
 
 class PassiveIngestionService:
@@ -52,7 +56,7 @@ def client(db_session: Session, tmp_path: Path) -> Iterator[TestClient]:
     def override_get_db():
         yield db_session
 
-    ingestion = PassiveIngestionService(DocumentStorage(tmp_path / "storage"))
+    ingestion = PassiveIngestionService(LocalDocumentStorage(tmp_path / "storage"))
     app.dependency_overrides[get_db] = override_get_db
     app.dependency_overrides[get_ingestion_service] = lambda: ingestion
     app.dependency_overrides[get_document_storage] = lambda: ingestion.storage

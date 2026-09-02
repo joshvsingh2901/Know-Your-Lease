@@ -1,5 +1,6 @@
 import uuid
 from pathlib import Path
+from typing import BinaryIO
 
 import pytest
 from fastapi import HTTPException
@@ -18,7 +19,29 @@ from app.models.answer_cache import GroundedAnswerCache
 from app.models.document import Document, DocumentStatus
 from app.models.document_chunk import DocumentChunk
 from app.services.document_ingestion import get_ingestion_service
-from app.services.storage import StorageError
+from app.services.storage import DocumentStorage, StorageError, get_document_storage
+
+
+class MemoryDocumentStorage(DocumentStorage):
+    def __init__(self) -> None:
+        self.objects: dict[str, bytes] = {}
+        self.saved_document_ids: list[uuid.UUID] = []
+
+    def save(self, document_id: uuid.UUID, source: BinaryIO) -> str:
+        key = f"uploads/{document_id}.pdf"
+        source.seek(0)
+        self.objects[key] = source.read()
+        self.saved_document_ids.append(document_id)
+        return key
+
+    def read(self, storage_key: str) -> bytes:
+        try:
+            return self.objects[storage_key]
+        except KeyError as exc:
+            raise StorageError("fake missing object") from exc
+
+    def delete(self, storage_key: str) -> None:
+        self.objects.pop(storage_key, None)
 
 
 def test_valid_pdf_upload_creates_document(
@@ -95,6 +118,7 @@ def test_upload_size_limit_is_enforced(
 
 def test_storage_failure_does_not_expose_internal_path(
     client: TestClient,
+    db_session: Session,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     ingestion = app.dependency_overrides[get_ingestion_service]()
@@ -115,11 +139,33 @@ def test_storage_failure_does_not_expose_internal_path(
         "detail": "The uploaded PDF could not be stored. Please try again."
     }
     assert "/private/storage" not in response.text
+    assert db_session.scalar(select(Document)) is None
+
+
+def test_upload_uses_injected_document_storage(
+    client: TestClient,
+    db_session: Session,
+) -> None:
+    storage = MemoryDocumentStorage()
+    ingestion = app.dependency_overrides[get_ingestion_service]()
+    ingestion.storage = storage
+
+    response = client.post(
+        "/documents",
+        files={"file": ("lease.pdf", b"%PDF-memory", "application/pdf")},
+    )
+
+    document = db_session.scalar(select(Document))
+    assert response.status_code == 201
+    assert document is not None
+    assert storage.saved_document_ids == [document.id]
+    assert storage.objects[document.storage_key] == b"%PDF-memory"
 
 
 def test_database_failure_does_not_expose_internal_detail(
     client: TestClient,
     db_session: Session,
+    tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     def fail_commit() -> None:
@@ -137,6 +183,7 @@ def test_database_failure_does_not_expose_internal_detail(
         "detail": "The document could not be recorded. Please try again."
     }
     assert "private database" not in response.text
+    assert list((tmp_path / "storage" / "uploads").glob("*.pdf")) == []
 
 
 def test_original_filename_is_sanitized(client: TestClient, db_session: Session) -> None:
@@ -325,6 +372,61 @@ def test_document_pdf_streams_from_document_storage(
     assert response.headers["content-type"].startswith("application/pdf")
     assert response.headers["cache-control"] == "no-store"
     assert response.content == expected_pdf
+
+
+def test_document_pdf_uses_backend_agnostic_storage_interface(
+    client: TestClient,
+    db_session: Session,
+) -> None:
+    document_id = uuid.uuid4()
+    key = f"uploads/{document_id}.pdf"
+    document = Document(
+        id=document_id,
+        original_filename="lease.pdf",
+        storage_key=key,
+        status=DocumentStatus.READY,
+    )
+    db_session.add(document)
+    db_session.commit()
+    storage = MemoryDocumentStorage()
+    storage.objects[key] = b"%PDF-from-object-storage"
+    app.dependency_overrides[get_document_storage] = lambda: storage
+
+    response = client.get(f"/documents/{document_id}/pdf")
+
+    assert response.status_code == 200
+    assert response.content == b"%PDF-from-object-storage"
+    assert "storage_key" not in response.text
+
+
+def test_document_pdf_provider_failure_returns_safe_temporary_error(
+    client: TestClient,
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    document_id = uuid.uuid4()
+    document = Document(
+        id=document_id,
+        original_filename="lease.pdf",
+        storage_key=f"uploads/{document_id}.pdf",
+        status=DocumentStatus.READY,
+    )
+    db_session.add(document)
+    db_session.commit()
+    storage = MemoryDocumentStorage()
+
+    def fail_read(storage_key: str) -> bytes:
+        del storage_key
+        raise StorageError("s3://private-bucket/private-key credential-value")
+
+    monkeypatch.setattr(storage, "read", fail_read)
+    app.dependency_overrides[get_document_storage] = lambda: storage
+
+    response = client.get(f"/documents/{document_id}/pdf")
+
+    assert response.status_code == 503
+    assert response.json() == {"detail": "Document PDF is temporarily unavailable."}
+    assert "private-bucket" not in response.text
 
 
 def test_document_pdf_missing_storage_file_is_safe_and_does_not_leak_path(

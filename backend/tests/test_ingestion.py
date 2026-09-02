@@ -8,7 +8,17 @@ from app.models.document import Document, DocumentStatus
 from app.models.document_chunk import DocumentChunk
 from app.services.document_ingestion import DocumentIngestionService
 from app.services.embeddings import EmbeddingProviderError
-from app.services.storage import DocumentStorage
+from app.services.storage import DocumentStorage, LocalDocumentStorage
+
+
+class TrackingLocalDocumentStorage(LocalDocumentStorage):
+    def __init__(self, root: Path) -> None:
+        super().__init__(root)
+        self.read_keys: list[str] = []
+
+    def read(self, storage_key: str) -> bytes:
+        self.read_keys.append(storage_key)
+        return super().read(storage_key)
 
 
 class FakeEmbeddingService:
@@ -49,7 +59,7 @@ def test_valid_pdf_becomes_ready_with_document_scoped_chunks(
         for index in range(90)
     )
     pdf_path = make_pdf(tmp_path / "lease.pdf", [lease_text, lease_text])
-    storage = DocumentStorage(tmp_path / "storage")
+    storage = TrackingLocalDocumentStorage(tmp_path / "storage")
     document_id = stored_document(session_factory, storage, pdf_path)
     with session_factory() as db:
         db.add(
@@ -69,6 +79,7 @@ def test_valid_pdf_becomes_ready_with_document_scoped_chunks(
     )
 
     assert service.process_document(document_id) is True
+    assert storage.read_keys == [f"uploads/{document_id}.pdf"]
 
     with session_factory() as db:
         document = db.get(Document, document_id)
@@ -100,7 +111,7 @@ def test_embedding_failure_marks_failed_and_removes_partial_index(
         tmp_path / "lease.pdf",
         ["The tenant must pay rent on the first day of every month. " * 20],
     )
-    storage = DocumentStorage(tmp_path / "storage")
+    storage = LocalDocumentStorage(tmp_path / "storage")
     document_id = stored_document(session_factory, storage, pdf_path)
     with session_factory() as db:
         db.add(
@@ -138,7 +149,7 @@ def test_embedding_failure_marks_failed_and_removes_partial_index(
 
 def test_extraction_failure_marks_failed(tmp_path: Path, make_pdf, session_factory) -> None:
     pdf_path = make_pdf(tmp_path / "blank.pdf", [None])
-    storage = DocumentStorage(tmp_path / "storage")
+    storage = LocalDocumentStorage(tmp_path / "storage")
     document_id = stored_document(session_factory, storage, pdf_path)
     service = DocumentIngestionService(
         session_factory=session_factory,

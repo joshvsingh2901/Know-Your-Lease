@@ -26,6 +26,7 @@ services:
         required: false
     environment:
       DATABASE_URL: postgresql+psycopg://lease_user:lease_password@database:5432/know_your_lease
+      DOCUMENT_STORAGE_BACKEND: local
       ENVIRONMENT: development
       PDF_STORAGE_DIR: /app/storage
       PORT: 8000

@@ -90,7 +90,7 @@ The frontend unlocks its question panel after indexing reaches `ready`, provides
 
 ## Storage, atomicity, and execution
 
-PDFs are written atomically to `<PDF_STORAGE_DIR>/uploads/<document-uuid>.pdf`; local development defaults `PDF_STORAGE_DIR` to `backend/storage`, while Railway uses a persistent volume rooted at `/data/documents`. The original filename is stored separately and never used as a path. `DocumentStorage` isolates this policy so object storage can replace it later.
+`DocumentStorage` owns UUID-based `uploads/<document-uuid>.pdf` keys and exposes save, read, and rollback-delete operations. `LocalDocumentStorage` writes atomically beneath `PDF_STORAGE_DIR`; `S3DocumentStorage` uses private direct object operations with SSE-S3 and no public ACL. The original filename is stored separately and never used as a path or object key. Ingestion reads bytes through the same interface, leaving extraction, chunking, and embedding behavior unchanged.
 
 FastAPI schedules ingestion with an in-process background task. Chunks are inserted only after extraction, chunking, and all embeddings succeed. The final transaction removes stale chunks, inserts the full replacement index, and marks the document `ready`; failures remove chunks and mark it `failed` with a safe message.
 
@@ -98,4 +98,4 @@ This is appropriate for the portfolio MVP but not durable: a process crash can i
 
 ## Current limitations
 
-OCR, authentication/user ownership, durable ingestion jobs, cross-process provider coordination, managed encrypted object storage, chat history, reranking, hybrid retrieval, calibrated relevance thresholds, and coordinate-level PDF highlights are not implemented. Debug chunk/retrieval endpoints expose lease excerpts and must remain disabled in production.
+OCR, authentication/user ownership, durable ingestion jobs, cross-process provider coordination, provisioned S3/lifecycle infrastructure, chat history, reranking, hybrid retrieval, calibrated relevance thresholds, and coordinate-level PDF highlights are not implemented. Debug chunk/retrieval endpoints expose lease excerpts and must remain disabled in production.

@@ -19,7 +19,7 @@ from app.services.embeddings import (
     get_embedding_service,
 )
 from app.services.pdf_extraction import PDFExtractionError, extract_pdf_pages
-from app.services.storage import DocumentStorage, StorageError
+from app.services.storage import DocumentStorage, StorageError, get_document_storage
 from app.services.text_normalization import normalize_page_text
 
 logger = logging.getLogger(__name__)
@@ -38,7 +38,7 @@ class DocumentIngestionService:
         chunker: Callable[[list], list[ChunkDraft]] = chunk_pages,
     ) -> None:
         self.session_factory = session_factory
-        self.storage = storage or DocumentStorage()
+        self.storage = storage or get_document_storage()
         self.embedding_service = embedding_service or get_embedding_service()
         self.extractor = extractor
         self.chunker = chunker
@@ -46,9 +46,9 @@ class DocumentIngestionService:
     def process_document(self, document_id: uuid.UUID) -> bool:
         try:
             storage_key = self._mark_processing(document_id)
-            path = self.storage.resolve(storage_key)
+            pdf_bytes = self.storage.read(storage_key)
             logger.info("Starting extraction for document %s", document_id)
-            extracted_pages = self.extractor(path)
+            extracted_pages = self.extractor(pdf_bytes)
             pages = [
                 type(page)(page_number=page.page_number, text=normalize_page_text(page.text))
                 for page in extracted_pages

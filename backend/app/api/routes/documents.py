@@ -13,7 +13,7 @@ from fastapi import (
     UploadFile,
     status,
 )
-from fastapi.responses import FileResponse
+from fastapi.responses import Response
 from sqlalchemy import func, select
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
@@ -58,7 +58,13 @@ from app.services.question_answering import (
     QuestionAnsweringService,
     get_question_answering_service,
 )
-from app.services.storage import DocumentStorage, StorageError, get_document_storage
+from app.services.storage import (
+    DocumentStorage,
+    InvalidStorageKeyError,
+    StorageError,
+    StorageNotFoundError,
+    get_document_storage,
+)
 
 router = APIRouter(tags=["documents"])
 logger = logging.getLogger(__name__)
@@ -130,7 +136,10 @@ async def upload_document(
         db.refresh(document)
     except SQLAlchemyError as exc:
         db.rollback()
-        storage.delete(storage_key)
+        try:
+            storage.delete(storage_key)
+        except StorageError:
+            logger.error("Could not clean up stored PDF for document %s", document_id)
         raise HTTPException(
             status_code=503,
             detail="The document could not be recorded. Please try again.",
@@ -159,25 +168,27 @@ def list_documents(
     )
 
 
-@router.get("/documents/{document_id}/pdf", response_class=FileResponse)
+@router.get("/documents/{document_id}/pdf", response_class=Response)
 def get_document_pdf(
     document: AccessibleDocument,
     storage: Annotated[DocumentStorage, Depends(get_document_storage)],
-) -> FileResponse:
+) -> Response:
     if not document.storage_key:
         raise HTTPException(status_code=404, detail="Document PDF is unavailable.")
 
     try:
-        pdf_path = storage.resolve(document.storage_key)
-    except StorageError:
-        logger.warning("Invalid PDF storage key for document %s", document.id)
-        raise HTTPException(status_code=404, detail="Document PDF is unavailable.") from None
-
-    if not pdf_path.is_file():
+        pdf_bytes = storage.read(document.storage_key)
+    except (InvalidStorageKeyError, StorageNotFoundError):
         logger.info("Stored PDF is unavailable for document %s", document.id)
-        raise HTTPException(status_code=404, detail="Document PDF is unavailable.")
-    return FileResponse(
-        pdf_path,
+        raise HTTPException(status_code=404, detail="Document PDF is unavailable.") from None
+    except StorageError:
+        logger.warning("Could not retrieve stored PDF for document %s", document.id)
+        raise HTTPException(
+            status_code=503,
+            detail="Document PDF is temporarily unavailable.",
+        ) from None
+    return Response(
+        content=pdf_bytes,
         media_type="application/pdf",
         headers={"Cache-Control": "no-store"},
     )

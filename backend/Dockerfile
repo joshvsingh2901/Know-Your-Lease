@@ -18,9 +18,9 @@ COPY requirements.txt requirements.lock ./
 RUN python -m pip install --requirement requirements.txt --constraint requirements.lock \
     && python -m pip check
 
-COPY --chown=app:app alembic.ini ./
-COPY --chown=app:app alembic ./alembic
-COPY --chown=app:app app ./app
+COPY alembic.ini ./
+COPY alembic ./alembic
+COPY app ./app
 
 RUN mkdir -p /app/storage/uploads \
     && chown -R app:app /app/storage

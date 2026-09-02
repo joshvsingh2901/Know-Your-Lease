@@ -82,7 +82,7 @@ Gemini never supplies trusted page numbers. The backend maps returned source IDs
 | Embeddings | Voyage AI `voyage-law-2` |
 | Retrieval | PostgreSQL, pgvector, exact cosine search |
 | Generation | Gemini structured JSON via the Google GenAI SDK |
-| Persistence | PostgreSQL, UUID-owned PDF storage, verified-answer cache |
+| Persistence | PostgreSQL, local/S3 UUID-owned PDF storage, verified-answer cache |
 | Supported deployment | Vercel frontend; Railway API, pgvector PostgreSQL, persistent volume |
 
 The project intentionally avoids LangChain, LlamaIndex, a second vector database, semantic caching, and an additional LLM verification call. Those components are deferred until evaluation demonstrates a concrete need.
@@ -93,9 +93,9 @@ The project intentionally avoids LangChain, LlamaIndex, a second vector database
 - Answers are restricted to retrieved lease evidence; unsupported questions abstain.
 - Retrieval, citations, and cache rows remain strictly scoped by `document_id`.
 - Unknown model source IDs reject the response; page and chunk metadata remain backend-owned.
-- PDFs use generated storage keys outside frontend public assets; APIs never expose internal paths.
+- PDFs use generated UUID storage keys in local or private S3 storage; APIs expose neither paths nor bucket details.
 - Provider/database secrets use masked configuration, and local `.env` files are ignored.
-- Production configuration rejects wildcard CORS, non-HTTPS frontend origins, enabled debug routes, missing provider keys, and public PDF storage paths.
+- Production configuration rejects wildcard CORS, non-HTTPS frontend origins, enabled debug routes, missing provider keys, unsafe local paths, and incomplete S3 settings.
 - Every document route passes through a centralized access-policy seam for future ownership enforcement.
 
 This is currently a single-user application. Browser `localStorage` remembers an active document UUID for convenience, not authorization; sensitive multi-user deployment requires authenticated document ownership.
@@ -150,6 +150,7 @@ npm run dev
 ```
 
 Open `http://localhost:3000`. Local PDFs default to `backend/storage/uploads/`; set `PDF_STORAGE_DIR` to override the storage root.
+S3 is optional and never required for local development; see [document storage](docs/document-storage.md) for backend selection and IAM-ready configuration.
 
 ### Containerized backend
 
@@ -190,6 +191,7 @@ The repository includes supported deployment configuration but does **not** clai
 
 See the [deployment runbook](docs/deployment.md) for exact settings and environment variables.
 The Phase 1 Docker image is a reusable runtime foundation only; no ECR or ECS deployment is implemented yet.
+The API also supports private S3 document storage, but Phase 2 does not provision a bucket or AWS runtime.
 
 ## Testing
 
@@ -215,10 +217,10 @@ Automated tests mock Voyage and Gemini; they do not make provider calls or re-in
 - No authentication or user/document ownership enforcement
 - In-process ingestion rather than a durable worker queue
 - Single-process provider rate coordination
-- Persistent filesystem storage rather than managed object storage
+- No provisioned S3 bucket, lifecycle/retention policy, backup policy, or AWS deployment infrastructure
 - No OCR, malware scanning, or encrypted retention workflow
 - No calibrated retrieval threshold, reranker, or hybrid lexical retrieval
 - No chat history or follow-up question rewriting
 - Best-effort text-layer highlighting rather than coordinate-level highlights
 
-Further detail: [architecture](docs/architecture.md), [RAG decisions](docs/rag-decisions.md), [retrieval evaluation](docs/retrieval-evaluation.md), and [production hardening](docs/production-hardening.md).
+Further detail: [architecture](docs/architecture.md), [document storage](docs/document-storage.md), [RAG decisions](docs/rag-decisions.md), [retrieval evaluation](docs/retrieval-evaluation.md), and [production hardening](docs/production-hardening.md).
