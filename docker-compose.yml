@@ -16,5 +16,27 @@ services:
       timeout: 5s
       retries: 10
 
+  api:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    env_file:
+      - path: ./backend/.env
+        required: false
+    environment:
+      DATABASE_URL: postgresql+psycopg://lease_user:lease_password@database:5432/know_your_lease
+      ENVIRONMENT: development
+      PDF_STORAGE_DIR: /app/storage
+      PORT: 8000
+    ports:
+      - "${BACKEND_PORT:-8000}:8000"
+    volumes:
+      - lease_pdf_storage:/app/storage
+    depends_on:
+      database:
+        condition: service_healthy
+
 volumes:
   lease_postgres_data:
+  lease_pdf_storage:

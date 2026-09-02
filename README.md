@@ -112,6 +112,7 @@ backend/evaluation/             Retrieval labels and evaluation tooling
 backend/tests/                  Offline provider-mocked regression suite
 docs/                           Architecture, decisions, evaluation, and deployment
 railway.toml                    Railway build, migration, startup, and health config
+backend/Dockerfile              Production-oriented API/migration runtime image
 ```
 
 ## Local Setup
@@ -150,6 +151,20 @@ npm run dev
 
 Open `http://localhost:3000`. Local PDFs default to `backend/storage/uploads/`; set `PDF_STORAGE_DIR` to override the storage root.
 
+### Containerized backend
+
+The production-oriented backend image runs Uvicorn as a non-root user, reads all configuration at runtime, includes Alembic migrations, and keeps application startup separate from schema migration:
+
+```bash
+docker compose up -d database
+docker compose build api
+docker compose run --rm api alembic upgrade head
+docker compose up -d api
+curl http://localhost:8000/health
+```
+
+This Compose path is optional; the native reload workflow above remains unchanged. See the [backend container runtime](docs/container-runtime.md) for direct build/run commands, required production variables, health semantics, storage permissions, migration ordering, and future ECR/ECS reuse.
+
 ## API Surface
 
 - `GET /health` — service health
@@ -174,6 +189,7 @@ The repository includes supported deployment configuration but does **not** clai
 - Alembic pre-deploy migrations, Uvicorn on Railway's assigned `PORT`, and `/health` gating
 
 See the [deployment runbook](docs/deployment.md) for exact settings and environment variables.
+The Phase 1 Docker image is a reusable runtime foundation only; no ECR or ECS deployment is implemented yet.
 
 ## Testing
 
