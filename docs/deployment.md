@@ -58,6 +58,7 @@ Configure these on the Railway API service:
 ENVIRONMENT=production
 DATABASE_URL=${{Postgres.DATABASE_URL}}
 FRONTEND_ORIGIN=https://<your-vercel-production-domain>
+INGESTION_MODE=inline
 DOCUMENT_STORAGE_BACKEND=local
 VOYAGE_API_KEY=<secret>
 VOYAGE_EMBEDDING_MODEL=voyage-law-2
@@ -84,9 +85,9 @@ Use this exact mount path:
 
 Set `PDF_STORAGE_DIR=/data/documents`. The application creates and uses `/data/documents/uploads/<document-uuid>.pdf` at runtime. The volume is not required during build or Alembic pre-deploy because migrations do not access PDF files.
 
-Keep one API replica: ingestion coordination is process-local, and a Railway service with a volume is not a horizontally shared filesystem. Configure Railway volume backups and capacity monitoring before storing anything important.
+Keep one API replica in this legacy Railway `INGESTION_MODE=inline` path: ingestion coordination is process-local, and a Railway service with a volume is not a horizontally shared filesystem. Configure Railway volume backups and capacity monitoring before storing anything important.
 
-This runbook deliberately retains the existing local-volume backend. An AWS-oriented production runtime should instead set `DOCUMENT_STORAGE_BACKEND=s3`, `S3_BUCKET_NAME`, and `AWS_REGION`, omit the PDF volume, and supply credentials through the platform credential chain. Future ECS tasks will use an IAM task role; Phase 2 does not provision that runtime or bucket. See [document storage](document-storage.md).
+This runbook deliberately retains the existing local-volume/inline backend. An AWS-oriented production runtime should set `DOCUMENT_STORAGE_BACKEND=s3`, `INGESTION_MODE=sqs`, the bucket and queue URLs, and `AWS_REGION`, omit the PDF volume, and supply credentials through the platform credential chain. Future ECS tasks should use separate API and worker task roles; this repository does not provision that runtime. See [document storage](document-storage.md) and [SQS ingestion worker](ingestion-worker.md).
 
 ## Vercel frontend
 

@@ -15,6 +15,7 @@ if TYPE_CHECKING:
 
 class DocumentStatus(str, enum.Enum):
     UPLOADED = "uploaded"
+    QUEUED = "queued"
     PROCESSING = "processing"
     READY = "ready"
     FAILED = "failed"

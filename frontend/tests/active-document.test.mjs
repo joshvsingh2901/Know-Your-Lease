@@ -55,6 +55,10 @@ test("a processing document restores and resumes status polling", async () => {
   assert.equal(shouldPollDocumentStatus(restored.status), true);
 });
 
+test("a queued document resumes status polling", () => {
+  assert.equal(shouldPollDocumentStatus("queued"), true);
+});
+
 test("an invalid or deleted document clears saved state", async () => {
   const storage = createStorage({ [ACTIVE_DOCUMENT_STORAGE_KEY]: "deleted-document" });
   const restored = await restoreActiveDocument(storage, async () => {

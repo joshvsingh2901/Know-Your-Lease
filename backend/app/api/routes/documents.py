@@ -51,6 +51,11 @@ from app.services.generation import (
     GenerationProviderError,
     GenerationResponseError,
 )
+from app.services.ingestion_queue import (
+    IngestionQueue,
+    IngestionQueueError,
+    get_ingestion_queue,
+)
 from app.services.question_answering import (
     DocumentNotFoundError,
     DocumentNotReadyError,
@@ -90,6 +95,7 @@ async def upload_document(
     file: Annotated[UploadFile, File()],
     db: Annotated[Session, Depends(get_db)],
     ingestion_service: Annotated[DocumentIngestionService, Depends(get_ingestion_service)],
+    ingestion_queue: Annotated[IngestionQueue | None, Depends(get_ingestion_queue)],
 ) -> Document:
     filename = Path((file.filename or "").replace("\\", "/")).name
     if not filename:
@@ -128,7 +134,11 @@ async def upload_document(
         id=document_id,
         original_filename=filename,
         storage_key=storage_key,
-        status=DocumentStatus.UPLOADED,
+        status=(
+            DocumentStatus.QUEUED
+            if settings.ingestion_mode == "sqs"
+            else DocumentStatus.UPLOADED
+        ),
     )
     db.add(document)
     try:
@@ -148,7 +158,30 @@ async def upload_document(
         await file.close()
 
     logger.info("Accepted document upload %s (%d bytes)", document.id, file_size)
-    background_tasks.add_task(ingestion_service.process_document, document.id)
+    if settings.ingestion_mode == "sqs":
+        try:
+            if ingestion_queue is None:
+                raise IngestionQueueError("The ingestion queue is not configured.")
+            ingestion_queue.enqueue(document.id)
+        except IngestionQueueError as exc:
+            logger.error("Could not enqueue ingestion for document %s", document.id)
+            document.status = DocumentStatus.FAILED
+            document.error_message = (
+                "Document ingestion could not be queued. Please upload the PDF again."
+            )
+            try:
+                db.commit()
+            except SQLAlchemyError:
+                db.rollback()
+                logger.exception(
+                    "Could not persist queue failure for document %s", document.id
+                )
+            raise HTTPException(
+                status_code=503,
+                detail="The document could not be queued for processing. Please try again.",
+            ) from exc
+    else:
+        background_tasks.add_task(ingestion_service.process_document, document.id)
     return document
 
 

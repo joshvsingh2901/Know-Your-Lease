@@ -24,6 +24,8 @@ class Settings(BaseSettings):
         "http://localhost:3001,http://127.0.0.1:3000,http://127.0.0.1:3001"
     )
     max_upload_size_mb: int = Field(default=20, gt=0, le=1_024)
+    ingestion_mode: Literal["inline", "sqs"] = "inline"
+    sqs_ingestion_queue_url: str | None = None
     document_storage_backend: Literal["local", "s3"] = "local"
     pdf_storage_dir: Path = BACKEND_DIR / "storage"
     s3_bucket_name: str | None = None
@@ -80,7 +82,14 @@ class Settings(BaseSettings):
             return value.strip().casefold()
         return value
 
-    @field_validator("s3_bucket_name", "aws_region")
+    @field_validator("ingestion_mode", mode="before")
+    @classmethod
+    def normalize_ingestion_mode(cls, value: object) -> object:
+        if isinstance(value, str):
+            return value.strip().casefold()
+        return value
+
+    @field_validator("s3_bucket_name", "aws_region", "sqs_ingestion_queue_url")
     @classmethod
     def normalize_optional_storage_setting(cls, value: str | None) -> str | None:
         if value is None:
@@ -164,9 +173,18 @@ def validate_runtime_settings(config: Settings) -> None:
     elif not config.s3_bucket_name or not config.aws_region:
         problems.append("S3 storage requires S3_BUCKET_NAME and AWS_REGION to be set.")
 
+    if config.ingestion_mode == "sqs" and (
+        not config.sqs_ingestion_queue_url or not config.aws_region
+    ):
+        problems.append(
+            "SQS ingestion requires SQS_INGESTION_QUEUE_URL and AWS_REGION to be set."
+        )
+
     if config.environment == "production":
         if "document_storage_backend" not in config.model_fields_set:
             problems.append("Production DOCUMENT_STORAGE_BACKEND must be set explicitly.")
+        if "ingestion_mode" not in config.model_fields_set:
+            problems.append("Production INGESTION_MODE must be set explicitly.")
         primary_origin = origins[0] if origins else ""
         parsed_origin = urlsplit(primary_origin) if primary_origin else None
         hostname = parsed_origin.hostname if parsed_origin else None

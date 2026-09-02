@@ -26,7 +26,7 @@ export function clearActiveDocumentId(storage: StorageLike): void {
 }
 
 export function shouldPollDocumentStatus(status: DocumentStatus): boolean {
-  return status === "uploaded" || status === "processing";
+  return status === "uploaded" || status === "queued" || status === "processing";
 }
 
 export async function restoreActiveDocument(

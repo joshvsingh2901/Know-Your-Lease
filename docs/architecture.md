@@ -1,6 +1,6 @@
 # Architecture
 
-The current system is a browser application, a FastAPI service with in-process ingestion, local-or-S3 private document storage, Voyage AI embeddings, exact PostgreSQL + pgvector retrieval, Gemini grounded answer generation, verified citation snippets, answer reuse, and PDF source inspection. The original upload and indexing boundaries remain intact.
+The current system is a browser application, a FastAPI service with inline-development or SQS-worker ingestion, local-or-S3 private document storage, Voyage AI embeddings, exact PostgreSQL + pgvector retrieval, Gemini grounded answer generation, verified citation snippets, answer reuse, and PDF source inspection. The original indexing pipeline remains intact behind a durable production queue boundary.
 
 ## Current system
 
@@ -10,7 +10,9 @@ Browser / Next.js
 FastAPI upload endpoint
   ↓
 DocumentStorage → safe local storage or private S3
-  ↓ FastAPI BackgroundTasks
+  ↓ SQS document identifier (production) or FastAPI BackgroundTasks (local)
+Standalone ingestion worker
+  ↓
 PyMuPDF page extraction
   ↓
 Conservative normalization
@@ -41,6 +43,7 @@ Answer, compact citation cards, and PDF page navigation
 - `backend/app/services/pdf_extraction.py`, `text_normalization.py`, and `chunking.py` form an inspectable preprocessing pipeline with no LLM or orchestration framework.
 - `backend/app/services/embeddings.py` batches document chunks, applies account-aware pacing and bounded transient retries, and validates Voyage output.
 - `backend/app/services/document_ingestion.py` owns status transitions and the final all-or-nothing chunk persistence transaction.
+- `backend/app/services/ingestion_queue.py` owns the versioned SQS publisher/consumer boundary, and `backend/app/workers/ingestion.py` owns standalone polling and acknowledgement orchestration.
 - `backend/app/services/retrieval.py` performs exact cosine search with a mandatory `document_id` predicate, retrieves 10 candidates, and diversifies them to at most 5 results.
 - `backend/app/services/generation.py` isolates the official Google GenAI client, structured JSON response schema, grounding prompt, prompt-injection boundary, source-ID validation, abstention behavior, and one bounded retry for transient provider overload.
 - `backend/app/services/citation_snippets.py` validates model quotes against source chunks and provides bounded sentence-aware fallback snippets plus conservative heading detection.
@@ -56,8 +59,10 @@ POST /documents
   ↓ validate filename, media type, %PDF- signature, and size
 Persist bytes atomically under a UUID storage key
   ↓
-Insert Document(status=uploaded)
-  ↓ return 201 and schedule background task
+Insert Document(status=queued) in SQS mode
+  ↓ publish {version, document_id} and return 201
+Standalone worker long-polls and validates the message
+  ↓
 Document(status=processing)
   ↓
 Extract pages → normalize → chunk → embed
@@ -114,7 +119,7 @@ Page numbers, section titles, snippets, similarity scores, and chunk IDs are map
 
 ## Processing boundary
 
-FastAPI `BackgroundTasks` keeps the upload request responsive without adding Redis or a worker service. The embedding service is process-local and serializes provider calls so its 3 RPM / 10K TPM pacing applies across uploads handled by that process. This is an MVP execution model: a production deployment should move ingestion to a durable queue because in-flight work is lost if the API process restarts, and rate limiting would need coordination across multiple API processes.
+`INGESTION_MODE=inline` retains FastAPI `BackgroundTasks` for AWS-free development. `INGESTION_MODE=sqs` makes the request process publish only a versioned document identifier; a standalone worker with independent database sessions invokes the unchanged ingestion service and deletes the receipt only on success. SQS provides at-least-once delivery, but Phase 3A does not yet add idempotency, application retry classification, DLQ/poison-message handling, distributed locks, or cross-process provider rate coordination.
 
 ## Deployment boundary
 
@@ -126,4 +131,4 @@ Provider and database exceptions never flow directly into API responses. Known p
 
 Configuration masks database/provider secrets in settings representations. Startup validation keeps development key-optional, while production requires explicit database/provider settings, an HTTPS non-loopback frontend origin, and disabled debug endpoints. Local storage must remain outside `frontend/public`; S3 mode requires bucket and region. CORS accepts validated explicit HTTP(S) origins only: configured local origins in development and only `FRONTEND_ORIGIN` outside development. Chunk/retrieval debug endpoints default on only in development and return 404 when disabled.
 
-The current system does not provide authentication/user ownership, provisioned S3 infrastructure or lifecycle/KMS policy, OCR, durable background jobs, cross-process rate limiting, chat history, query rewriting, reranking, hybrid/full-text retrieval, coordinate-level PDF highlights, or a calibrated relevance threshold. Text-layer highlighting is best-effort because PDFs can expose text with imperfect spacing. Abstention relies on evidence-limited prompting plus strict source-ID validation, not a calibrated score cutoff or a second faithfulness model. It is not safe for multi-user exposure until authenticated ownership is added centrally.
+The current system does not provide authentication/user ownership, provisioned S3/SQS infrastructure or lifecycle/KMS/redrive policy, Phase 3B idempotency and retry hardening, OCR, cross-process rate limiting, chat history, query rewriting, reranking, hybrid/full-text retrieval, coordinate-level PDF highlights, or a calibrated relevance threshold. Text-layer highlighting is best-effort because PDFs can expose text with imperfect spacing. Abstention relies on evidence-limited prompting plus strict source-ID validation, not a calibrated score cutoff or a second faithfulness model. It is not safe for multi-user exposure until authenticated ownership is added centrally.

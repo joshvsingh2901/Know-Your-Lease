@@ -46,6 +46,7 @@ def test_production_configuration_requires_explicit_safe_values(tmp_path: Path) 
         voyage_api_key="example-voyage-key",
         gemini_api_key="example-gemini-key",
         debug_endpoints_enabled=False,
+        ingestion_mode="inline",
         document_storage_backend="local",
         pdf_storage_dir=tmp_path / "storage",
     )
@@ -71,6 +72,7 @@ def test_unsafe_production_defaults_fail_without_echoing_secrets() -> None:
     assert "Production FRONTEND_ORIGIN" in message
     assert "Production DATABASE_URL" in message
     assert "Production DOCUMENT_STORAGE_BACKEND" in message
+    assert "Production INGESTION_MODE" in message
     assert "DEBUG_ENDPOINTS_ENABLED" in message
     assert "private-voyage-key" not in message
     assert "private-gemini-key" not in message
@@ -154,6 +156,35 @@ def test_s3_storage_configuration_is_read_from_environment(
 def test_invalid_document_storage_backend_fails_clearly() -> None:
     with pytest.raises(ValidationError, match="document_storage_backend"):
         Settings(_env_file=None, document_storage_backend="filesystem")
+
+
+def test_sqs_ingestion_requires_queue_url_and_region() -> None:
+    config = Settings(_env_file=None, ingestion_mode="sqs")
+
+    with pytest.raises(RuntimeError, match="SQS_INGESTION_QUEUE_URL and AWS_REGION"):
+        validate_runtime_settings(config)
+
+
+def test_sqs_ingestion_configuration_is_normalized_and_valid() -> None:
+    config = Settings(
+        _env_file=None,
+        ingestion_mode=" SQS ",
+        sqs_ingestion_queue_url=" https://sqs.ca-central-1.amazonaws.com/123/ingestion ",
+        aws_region=" ca-central-1 ",
+    )
+
+    validate_runtime_settings(config)
+
+    assert config.ingestion_mode == "sqs"
+    assert config.sqs_ingestion_queue_url == (
+        "https://sqs.ca-central-1.amazonaws.com/123/ingestion"
+    )
+    assert config.aws_region == "ca-central-1"
+
+
+def test_invalid_ingestion_mode_fails_clearly() -> None:
+    with pytest.raises(ValidationError, match="ingestion_mode"):
+        Settings(_env_file=None, ingestion_mode="celery")
 
 
 @pytest.mark.parametrize("scheme", ["postgresql://", "postgres://"])

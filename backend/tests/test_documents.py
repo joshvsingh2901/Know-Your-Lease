@@ -19,6 +19,11 @@ from app.models.answer_cache import GroundedAnswerCache
 from app.models.document import Document, DocumentStatus
 from app.models.document_chunk import DocumentChunk
 from app.services.document_ingestion import get_ingestion_service
+from app.services.ingestion_queue import (
+    IngestionQueue,
+    IngestionQueueError,
+    get_ingestion_queue,
+)
 from app.services.storage import DocumentStorage, StorageError, get_document_storage
 
 
@@ -42,6 +47,17 @@ class MemoryDocumentStorage(DocumentStorage):
 
     def delete(self, storage_key: str) -> None:
         self.objects.pop(storage_key, None)
+
+
+class RecordingIngestionQueue(IngestionQueue):
+    def __init__(self, *, fail: bool = False) -> None:
+        self.fail = fail
+        self.document_ids: list[uuid.UUID] = []
+
+    def enqueue(self, document_id: uuid.UUID) -> None:
+        if self.fail:
+            raise IngestionQueueError("private queue provider detail")
+        self.document_ids.append(document_id)
 
 
 def test_valid_pdf_upload_creates_document(
@@ -68,6 +84,60 @@ def test_valid_pdf_upload_creates_document(
     assert document.status == DocumentStatus.UPLOADED
     assert document.storage_key == f"uploads/{document.id}.pdf"
     assert (tmp_path / "storage" / document.storage_key).is_file()
+    ingestion = app.dependency_overrides[get_ingestion_service]()
+    assert ingestion.requested_documents == [document.id]
+
+
+def test_sqs_upload_enqueues_without_running_ingestion_inline(
+    client: TestClient,
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    queue = RecordingIngestionQueue()
+    monkeypatch.setattr(settings, "ingestion_mode", "sqs")
+    app.dependency_overrides[get_ingestion_queue] = lambda: queue
+    ingestion = app.dependency_overrides[get_ingestion_service]()
+
+    response = client.post(
+        "/documents",
+        files={"file": ("lease.pdf", b"%PDF-1.4\n%%EOF", "application/pdf")},
+    )
+
+    document = db_session.scalar(select(Document))
+    assert response.status_code == 201
+    assert response.json()["status"] == "queued"
+    assert document is not None
+    assert document.status == DocumentStatus.QUEUED
+    assert queue.document_ids == [document.id]
+    assert ingestion.requested_documents == []
+
+
+def test_sqs_enqueue_failure_marks_document_failed_without_inline_ingestion(
+    client: TestClient,
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    queue = RecordingIngestionQueue(fail=True)
+    monkeypatch.setattr(settings, "ingestion_mode", "sqs")
+    app.dependency_overrides[get_ingestion_queue] = lambda: queue
+    ingestion = app.dependency_overrides[get_ingestion_service]()
+
+    response = client.post(
+        "/documents",
+        files={"file": ("lease.pdf", b"%PDF-1.4\n%%EOF", "application/pdf")},
+    )
+
+    document = db_session.scalar(select(Document))
+    assert response.status_code == 503
+    assert response.json() == {
+        "detail": "The document could not be queued for processing. Please try again."
+    }
+    assert "private queue provider detail" not in response.text
+    assert document is not None
+    assert document.status == DocumentStatus.FAILED
+    assert document.error_message is not None
+    assert "could not be queued" in document.error_message
+    assert ingestion.requested_documents == []
 
 
 def test_non_pdf_upload_is_rejected(client: TestClient, db_session: Session) -> None:

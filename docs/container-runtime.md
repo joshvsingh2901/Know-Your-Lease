@@ -45,6 +45,7 @@ Configuration is supplied only at runtime. No `.env` file or secret is copied in
 - `FRONTEND_ORIGIN` as the exact public HTTPS frontend origin
 - `VOYAGE_API_KEY` and `GEMINI_API_KEY`
 - `DEBUG_ENDPOINTS_ENABLED=false`
+- explicit `INGESTION_MODE=inline|sqs`
 - explicit `DOCUMENT_STORAGE_BACKEND=local|s3`
 
 `DOCUMENT_STORAGE_BACKEND=local` uses `PDF_STORAGE_DIR` as the writable PDF root (the image default resolves to `/app/storage`). `DOCUMENT_STORAGE_BACKEND=s3` instead requires `S3_BUCKET_NAME` and `AWS_REGION`; boto3 resolves credentials at runtime, so none are copied into the image. `PORT`, model names, upload limits, provider pacing, answer-cache version, and the other existing settings remain environment-configurable. Development and tests may omit provider keys when calls are mocked or those features are unused.
@@ -68,7 +69,13 @@ Do not put `alembic upgrade head` in the image startup command. With multiple re
 one migration task -> successful alembic upgrade head -> deploy API tasks
 ```
 
-A later ECS implementation can publish this same image to ECR, run it once with the Alembic command, and then use its default Uvicorn command for API tasks. A future ingestion worker can override the command while retaining the same code and dependency baseline. ECR/ECS resources and worker behavior are not part of Phase 1.
+The same image supports the default Uvicorn API command and the Phase 3A worker override:
+
+```bash
+python -m app.workers.ingestion
+```
+
+Use `python -m app.workers.ingestion --check` for an offline configuration/startup check. A worker container must disable or replace the image's API `/health` Docker health check because it does not expose HTTP. ECR/ECS resources are not provisioned by this repository.
 
 ## Image design
 

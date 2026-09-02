@@ -296,6 +296,7 @@ export function LeaseUpload() {
                       : "text-[var(--navy)]"
                   }`}>
                     {document.status === "uploaded" && "Lease uploaded"}
+                    {document.status === "queued" && "Lease queued"}
                     {document.status === "processing" && "Processing your lease"}
                     {document.status === "failed" && "Processing failed"}
                   </p>
@@ -309,6 +310,7 @@ export function LeaseUpload() {
               <div className="mt-5 border-t border-current/10 pt-4">
                 <p className="text-sm leading-6 text-[var(--muted)]">
                   {document.status === "uploaded" && "Upload complete. Document processing will begin shortly."}
+                  {document.status === "queued" && "Upload complete. Your lease is waiting for a worker."}
                   {document.status === "processing" && "Extracting clauses and creating the document index…"}
                   {document.status === "failed" && (document.error_message ?? "This lease could not be indexed. Please try another PDF.")}
                 </p>
