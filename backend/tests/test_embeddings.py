@@ -1,6 +1,7 @@
 from dataclasses import dataclass
 
 import pytest
+import voyageai.error
 
 from app.services.embeddings import (
     EmbeddingConfigurationError,
@@ -173,11 +174,19 @@ def test_provider_token_counts_split_the_actual_failed_batch_safely() -> None:
     assert delays == [60.0]
 
 
-def test_provider_failure_logs_safe_diagnostics(caplog) -> None:
+@pytest.mark.parametrize(
+    ("status_code", "expected_error_code"),
+    [(429, "provider_rate_limit"), (503, "provider_unavailable")],
+)
+def test_provider_failure_logs_safe_diagnostics(
+    caplog,
+    status_code: int,
+    expected_error_code: str,
+) -> None:
     class FinalRateLimitClient:
         def embed(self, texts, **kwargs):
             error = TransientError("sensitive provider detail")
-            error.http_status = 429
+            error.http_status = status_code
             error.code = "rate_limit"
             error.request_id = "request-123"
             raise error
@@ -190,12 +199,65 @@ def test_provider_failure_logs_safe_diagnostics(caplog) -> None:
         token_safety_factor=1.0,
     )
 
-    with pytest.raises(EmbeddingProviderError):
+    with pytest.raises(EmbeddingProviderError) as exc_info:
         service.embed_documents(["lease"], [1])
 
-    assert "status=429" in caplog.text
+    assert exc_info.value.transient is True
+    assert exc_info.value.error_code == expected_error_code
+    assert f"status={status_code}" in caplog.text
     assert "request_id=request-123" in caplog.text
     assert "sensitive provider detail" not in caplog.text
+
+
+@pytest.mark.parametrize(
+    "voyage_error_type",
+    [
+        voyageai.error.APIConnectionError,
+        voyageai.error.TryAgain,
+        voyageai.error.RateLimitError,
+        voyageai.error.ServerError,
+        voyageai.error.ServiceUnavailableError,
+        voyageai.error.Timeout,
+    ],
+)
+def test_voyage_sdk_errors_without_a_status_code_are_classified_transient(
+    voyage_error_type: type[Exception],
+) -> None:
+    class RaisingClient:
+        def embed(self, texts, **kwargs):
+            raise voyage_error_type("network hiccup")
+
+    service = VoyageEmbeddingService(
+        client=RaisingClient(),
+        dimensions=4,
+        max_retries=0,
+        token_counter=lambda texts: [1 for _ in texts],
+        token_safety_factor=1.0,
+    )
+
+    with pytest.raises(EmbeddingProviderError) as exc_info:
+        service.embed_documents(["lease"], [1])
+
+    assert exc_info.value.transient is True
+
+
+def test_voyage_authentication_error_is_classified_terminal() -> None:
+    class RaisingClient:
+        def embed(self, texts, **kwargs):
+            raise voyageai.error.AuthenticationError("invalid api key")
+
+    service = VoyageEmbeddingService(
+        client=RaisingClient(),
+        dimensions=4,
+        max_retries=0,
+        token_counter=lambda texts: [1 for _ in texts],
+        token_safety_factor=1.0,
+    )
+
+    with pytest.raises(EmbeddingProviderError) as exc_info:
+        service.embed_documents(["lease"], [1])
+
+    assert exc_info.value.transient is False
 
 
 def test_missing_key_fails_only_when_embeddings_are_requested() -> None:

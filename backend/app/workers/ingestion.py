@@ -6,13 +6,11 @@ import time
 from collections.abc import Callable
 
 from pydantic import ValidationError
-from sqlalchemy.orm import Session
 
 from app.core.config import settings, validate_runtime_settings
-from app.core.database import SessionLocal
-from app.models.document import Document
 from app.services.document_ingestion import (
     DocumentIngestionService,
+    IngestionOutcome,
     get_ingestion_service,
 )
 from app.services.ingestion_queue import (
@@ -24,7 +22,6 @@ from app.services.ingestion_queue import (
 )
 
 logger = logging.getLogger(__name__)
-SessionFactory = Callable[[], Session]
 
 
 class IngestionWorker:
@@ -33,13 +30,11 @@ class IngestionWorker:
         *,
         consumer: IngestionQueueConsumer,
         ingestion_service: DocumentIngestionService,
-        session_factory: SessionFactory = SessionLocal,
         queue_error_delay_seconds: float = 5.0,
         sleep: Callable[[float], None] = time.sleep,
     ) -> None:
         self.consumer = consumer
         self.ingestion_service = ingestion_service
-        self.session_factory = session_factory
         self.queue_error_delay_seconds = queue_error_delay_seconds
         self.sleep = sleep
 
@@ -73,24 +68,10 @@ class IngestionWorker:
             return
 
         try:
-            with self.session_factory() as db:
-                document_exists = db.get(Document, message.document_id) is not None
-        except Exception:
-            logger.exception(
-                "Could not load document %s; message was not acknowledged",
+            outcome = self.ingestion_service.process_document(
                 message.document_id,
+                message.ingestion_version,
             )
-            return
-
-        if not document_exists:
-            logger.warning(
-                "Document %s does not exist; message was not acknowledged",
-                message.document_id,
-            )
-            return
-
-        try:
-            succeeded = self.ingestion_service.process_document(message.document_id)
         except Exception:
             logger.exception(
                 "Unexpected ingestion failure for document %s; message was not acknowledged",
@@ -98,10 +79,20 @@ class IngestionWorker:
             )
             return
 
-        if not succeeded:
-            logger.warning(
-                "Ingestion failed for document %s; message was not acknowledged",
+        if not isinstance(outcome, IngestionOutcome):
+            logger.error(
+                "Ingestion service returned an invalid outcome for document %s",
                 message.document_id,
+            )
+            return
+
+        if not outcome.acknowledge:
+            logger.warning(
+                "Ingestion outcome=%s for document %s version=%d; message was not "
+                "acknowledged",
+                outcome.value,
+                message.document_id,
+                message.ingestion_version,
             )
             return
 
@@ -113,7 +104,12 @@ class IngestionWorker:
                 message.document_id,
             )
             return
-        logger.info("Acknowledged ingestion message for document %s", message.document_id)
+        logger.info(
+            "Acknowledged ingestion message for document %s version=%d outcome=%s",
+            message.document_id,
+            message.ingestion_version,
+            outcome.value,
+        )
 
 
 def create_worker() -> IngestionWorker:

@@ -67,7 +67,7 @@ flowchart LR
 
 ### Ingestion
 
-PDFs are validated before storage. In SQS mode, the API commits a `queued` document and publishes only its UUID; the standalone worker then reuses the existing ingestion service. Text is normalized without paraphrasing and split into page-aware chunks. Voyage document embeddings use asymmetric document mode and are persisted as 1,024-dimensional vectors. Chunk persistence is all-or-nothing: a document becomes `ready` only after extraction, chunking, and all embeddings succeed.
+PDFs are validated before storage. In SQS mode, the API commits a `queued` document and publishes only its UUID and ingestion version; the standalone worker then reuses the existing ingestion service. Document-level version/attempt checks make duplicate and stale delivery safe. Text is normalized without paraphrasing and split into page-aware chunks. Voyage document embeddings use asymmetric document mode and are persisted as 1,024-dimensional vectors. Chunk replacement, cache invalidation, and the `ready` transition commit atomically after all embeddings succeed.
 
 ### Retrieval and generation
 
@@ -221,7 +221,8 @@ Automated tests mock Voyage and Gemini; they do not make provider calls or re-in
 ## Current Limitations
 
 - No authentication or user/document ownership enforcement
-- Phase 3A queue processing has at-least-once delivery but not yet idempotency, application retry classification, DLQ/poison-message hardening, or distributed locks
+- SQS remains at-least-once: application processing is idempotent, but AWS queue/DLQ provisioning, automated replay, visibility heartbeats, and cross-process provider rate coordination remain operational work
+- No re-ingestion endpoint or version-bump producer: every document is created at ingestion version 1, and the version/attempt machinery that guards duplicate/stale delivery has no caller that requests a later version yet
 - Single-process provider rate coordination
 - No provisioned S3 bucket, lifecycle/retention policy, backup policy, or AWS deployment infrastructure
 - No OCR, malware scanning, or encrypted retention workflow

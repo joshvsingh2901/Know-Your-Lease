@@ -6,7 +6,7 @@ from typing import Any, Literal
 
 import boto3
 from botocore.exceptions import BotoCoreError, ClientError
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, PositiveInt
 
 from app.core.config import settings
 
@@ -20,11 +20,12 @@ class IngestionMessage(BaseModel):
 
     version: Literal[1] = 1
     document_id: uuid.UUID
+    ingestion_version: PositiveInt = 1
 
 
 class IngestionQueue(ABC):
     @abstractmethod
-    def enqueue(self, document_id: uuid.UUID) -> None:
+    def enqueue(self, document_id: uuid.UUID, ingestion_version: int) -> None:
         """Publish an ingestion request containing only the document identifier."""
 
 
@@ -50,8 +51,11 @@ class SQSIngestionQueue(IngestionQueue):
         self.client = client
         self.queue_url = queue_url
 
-    def enqueue(self, document_id: uuid.UUID) -> None:
-        body = IngestionMessage(document_id=document_id).model_dump_json()
+    def enqueue(self, document_id: uuid.UUID, ingestion_version: int) -> None:
+        body = IngestionMessage(
+            document_id=document_id,
+            ingestion_version=ingestion_version,
+        ).model_dump_json()
         try:
             self.client.send_message(QueueUrl=self.queue_url, MessageBody=body)
         except (BotoCoreError, ClientError) as exc:

@@ -53,11 +53,13 @@ class RecordingIngestionQueue(IngestionQueue):
     def __init__(self, *, fail: bool = False) -> None:
         self.fail = fail
         self.document_ids: list[uuid.UUID] = []
+        self.ingestion_versions: list[int] = []
 
-    def enqueue(self, document_id: uuid.UUID) -> None:
+    def enqueue(self, document_id: uuid.UUID, ingestion_version: int) -> None:
         if self.fail:
             raise IngestionQueueError("private queue provider detail")
         self.document_ids.append(document_id)
+        self.ingestion_versions.append(ingestion_version)
 
 
 def test_valid_pdf_upload_creates_document(
@@ -86,6 +88,8 @@ def test_valid_pdf_upload_creates_document(
     assert (tmp_path / "storage" / document.storage_key).is_file()
     ingestion = app.dependency_overrides[get_ingestion_service]()
     assert ingestion.requested_documents == [document.id]
+    assert ingestion.requested_versions == [1]
+    assert ingestion.requested_durable_retries == [False]
 
 
 def test_sqs_upload_enqueues_without_running_ingestion_inline(
@@ -109,6 +113,7 @@ def test_sqs_upload_enqueues_without_running_ingestion_inline(
     assert document is not None
     assert document.status == DocumentStatus.QUEUED
     assert queue.document_ids == [document.id]
+    assert queue.ingestion_versions == [1]
     assert ingestion.requested_documents == []
 
 
@@ -137,6 +142,8 @@ def test_sqs_enqueue_failure_marks_document_failed_without_inline_ingestion(
     assert document.status == DocumentStatus.FAILED
     assert document.error_message is not None
     assert "could not be queued" in document.error_message
+    assert document.last_ingestion_error_code == "queue_publish_failed"
+    assert document.last_ingestion_failed_at is not None
     assert ingestion.requested_documents == []
 
 

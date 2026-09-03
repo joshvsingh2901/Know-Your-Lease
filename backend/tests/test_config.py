@@ -187,6 +187,12 @@ def test_invalid_ingestion_mode_fails_clearly() -> None:
         Settings(_env_file=None, ingestion_mode="celery")
 
 
+@pytest.mark.parametrize("timeout", [0, 59, 43_201])
+def test_ingestion_processing_timeout_is_bounded(timeout: int) -> None:
+    with pytest.raises(ValidationError, match="ingestion_processing_timeout_seconds"):
+        Settings(_env_file=None, ingestion_processing_timeout_seconds=timeout)
+
+
 @pytest.mark.parametrize("scheme", ["postgresql://", "postgres://"])
 def test_railway_database_url_uses_installed_psycopg_driver(scheme: str) -> None:
     config = Settings(

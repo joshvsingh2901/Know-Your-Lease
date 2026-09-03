@@ -1,5 +1,6 @@
 import logging
 import uuid
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Annotated
 
@@ -134,6 +135,7 @@ async def upload_document(
         id=document_id,
         original_filename=filename,
         storage_key=storage_key,
+        current_ingestion_version=1,
         status=(
             DocumentStatus.QUEUED
             if settings.ingestion_mode == "sqs"
@@ -162,13 +164,18 @@ async def upload_document(
         try:
             if ingestion_queue is None:
                 raise IngestionQueueError("The ingestion queue is not configured.")
-            ingestion_queue.enqueue(document.id)
+            ingestion_queue.enqueue(
+                document.id,
+                document.current_ingestion_version,
+            )
         except IngestionQueueError as exc:
             logger.error("Could not enqueue ingestion for document %s", document.id)
             document.status = DocumentStatus.FAILED
             document.error_message = (
                 "Document ingestion could not be queued. Please upload the PDF again."
             )
+            document.last_ingestion_error_code = "queue_publish_failed"
+            document.last_ingestion_failed_at = datetime.now(UTC)
             try:
                 db.commit()
             except SQLAlchemyError:
@@ -181,7 +188,12 @@ async def upload_document(
                 detail="The document could not be queued for processing. Please try again.",
             ) from exc
     else:
-        background_tasks.add_task(ingestion_service.process_document, document.id)
+        background_tasks.add_task(
+            ingestion_service.process_document,
+            document.id,
+            document.current_ingestion_version,
+            False,
+        )
     return document
 
 

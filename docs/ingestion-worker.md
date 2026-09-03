@@ -1,45 +1,103 @@
-# SQS Ingestion Worker
+# SQS Ingestion Reliability
 
-Phase 3A separates production ingestion from the FastAPI process. The API remains responsible for validating and storing a PDF, creating its document row, and publishing a small SQS message. A standalone process reuses the existing ingestion service for extraction, chunking, embeddings, and transactional chunk persistence.
+Phase 3B keeps the Phase 3A API → SQS → worker boundary and makes processing idempotent under SQS at-least-once delivery. The API publishes an identifier and ingestion version; the worker reuses `DocumentIngestionService` for the unchanged extraction, chunking, Voyage embedding, and PostgreSQL/pgvector pipeline.
 
-## Modes and flow
+## Modes and message contract
 
-Local development defaults to the existing background-task path:
+Local development remains AWS-free with `INGESTION_MODE=inline`. SQS mode requires `SQS_INGESTION_QUEUE_URL` and `AWS_REGION`; boto3 uses its normal credential chain rather than application-managed static keys.
 
-```dotenv
-INGESTION_MODE=inline
-```
-
-The document moves from `uploaded` to `processing`, then `ready` or `failed`. This mode needs no AWS account and is intended for development and focused testing.
-
-SQS mode requires explicit queue configuration:
-
-```dotenv
-INGESTION_MODE=sqs
-SQS_INGESTION_QUEUE_URL=https://sqs.ca-central-1.amazonaws.com/<account-id>/<queue-name>
-AWS_REGION=ca-central-1
-```
-
-The API flow is:
-
-```text
-validate PDF -> DocumentStorage.save -> commit Document(status=queued)
-             -> SQS SendMessage -> return 201
-```
-
-No extraction, chunking, embedding, or vector persistence runs in the request process in SQS mode. If publishing fails, the API records `failed` with a safe error and returns 503. The stored object is retained deliberately; Phase 3A does not add a distributed transaction or automatic orphan cleanup.
-
-The message contract contains identifiers only:
+The JSON message contains no document content:
 
 ```json
-{"version":1,"document_id":"<uuid>"}
+{"version":1,"document_id":"<uuid>","ingestion_version":1}
 ```
 
-PDF bytes, extracted lease text, vectors, filenames, credentials, and other private content are never placed in the queue message. Unknown fields, unsupported versions, malformed JSON, and invalid UUIDs fail validation.
+`version` is the message-schema version. `ingestion_version` identifies the requested index generation for that document. Unknown fields, unsupported schema versions, non-positive ingestion versions, malformed JSON, and invalid UUIDs fail validation without mutating a document.
 
-## Worker
+For a safe rolling upgrade, Phase 3A messages that predate the field are interpreted as ingestion version 1. All newly published messages include the field explicitly.
 
-Run the worker from the backend environment:
+## Idempotent claim and completion
+
+Each document stores its current and completed ingestion versions, total claimed attempts, last safe error code, and last start/failure timestamps. A worker handles a valid message as follows:
+
+- An older version is stale: skip processing and acknowledge it.
+- A current version already recorded as `ready`/completed is a duplicate: skip processing and acknowledge it.
+- A version newer than the document record is invalid/out of order: do not process or acknowledge it, allowing redrive to the DLQ.
+- A fresh `processing` claim is busy: do not process or acknowledge the duplicate.
+- A `processing` claim older than `INGESTION_PROCESSING_TIMEOUT_SECONDS` can be reclaimed after a crash.
+- A current `queued` or `uploaded` version is atomically changed to `processing`, and its attempt number is incremented.
+- A processing attempt that ends in a durably recorded permanent document failure (`status=failed`) is acknowledged: the outcome is already safely persisted, so redelivering it would only repeat wasted work.
+- A processing attempt that ends in a transient/retryable failure is not acknowledged, so SQS redelivers it for another attempt.
+
+The atomic conditional update prevents two workers from claiming a fresh version simultaneously. Completion also checks the document version and attempt number under a PostgreSQL row lock. If another attempt reclaimed the job or a newer ingestion version was requested, the older attempt cannot replace chunks or invalidate cache entries. The existing unique `(document_id, chunk_index)` constraint remains a final duplicate defense.
+
+## Transaction and cache boundary
+
+PDF reads, extraction, chunk construction, and provider calls occur without a long-lived database transaction. After all embeddings exist, one short transaction:
+
+1. locks and revalidates the document version and attempt;
+2. deletes the previous document chunks;
+3. inserts the complete replacement index;
+4. invalidates that document's exact-question cache;
+5. records the completed version and marks `ready`;
+6. commits everything together.
+
+A failed transaction rolls back chunk deletion, insertion, cache deletion, and readiness together. Previously committed chunks/cache may remain while the document is non-ready, but question APIs cannot serve them. Cache invalidation therefore happens exactly once for the successful new version, not when an attempt merely starts. Duplicate and stale deliveries do not touch the cache.
+
+## Retry and status model
+
+Voyage retains its existing bounded retry policy: at most two brief internal retries for 429, 5xx, timeout, or unavailable failures, including existing rate-budget pacing and `Retry-After` handling. After those attempts, the worker uses SQS visibility/redelivery as the outer durable retry layer; it does not re-enqueue messages.
+
+Retryable SQS failures include transient Voyage/provider errors, temporary storage failures, and database failures. The document returns to `queued`, records a safe code such as `provider_rate_limit`, `provider_unavailable`, `storage_unavailable`, or `database_error`, and the message remains undeleted. Inline development has no durable redelivery mechanism, so an exhausted transient attempt becomes `failed` instead of remaining queued forever.
+
+Permanent document failures include corrupt/image-only PDFs, missing/invalid stored objects or metadata, deterministic embedding errors, and provider configuration errors. They mark the document `failed` and, because that failure is durably committed before the worker responds, the message is acknowledged and deleted. The failure is discoverable through the document's own `status`/`error_message`/`last_ingestion_error_code`, not by holding a redundant copy of it in the DLQ. Malformed/poison messages (invalid JSON, unsupported schema version, non-positive ingestion version, unparseable UUID) are different: nothing is recorded for them, so they are never acknowledged and rely entirely on the queue's redrive policy to reach the DLQ after `maxReceiveCount` deliveries.
+
+The resulting status flow is:
+
+```text
+uploaded -> queued -> processing -> ready
+                         |            ^
+                         v            |
+                 queued (retryable) --+
+                         |
+                         +-> failed (terminal)
+```
+
+Attempt/error metadata is internal and not exposed in document API responses. Frontend polling continues for `queued` and `processing`, and stops for `ready` or terminal `failed`.
+
+## Crash boundaries
+
+- Before the claim commits: no state changes; the undeleted message can be retried.
+- After `processing` but before embeddings complete: the claim becomes reclaimable after the processing timeout.
+- During final persistence: PostgreSQL rolls back the entire replacement transaction; the message remains undeleted.
+- After final commit but before `DeleteMessage`: redelivery observes the same version already completed and acknowledges it without reading the PDF, embedding, deleting chunks, or invalidating cache again.
+
+This is at-least-once delivery plus idempotent processing, not exactly-once delivery. A worker that exceeds the processing timeout can overlap a reclaiming attempt and cause duplicate provider work, but version/attempt checks prevent the older attempt from committing stale data.
+
+## SQS queue and DLQ settings
+
+Use AWS-native redrive from the main queue to a dedicated DLQ. The application does not send directly to the DLQ and needs no DLQ URL/ARN configuration.
+
+Recommended starting settings:
+
+- Long polling: 20 seconds, matching the worker.
+- Visibility timeout: 15 minutes, matching the default 900-second processing timeout; increase both above measured high-percentile ingestion duration plus margin for larger leases.
+- Main queue retention: 4 days.
+- Redrive `maxReceiveCount`: 5.
+- DLQ retention: 14 days, longer than the main queue.
+- CloudWatch alarms: visible DLQ messages, oldest main-queue message age, and sustained queue depth.
+
+No visibility heartbeat is implemented. Operations must size the queue visibility timeout and `INGESTION_PROCESSING_TIMEOUT_SECONDS` consistently. Poison/malformed, missing-document, future-version, and busy-duplicate messages remain undeleted and are spaced by SQS visibility before AWS redrives them; there is no application tight loop. Recorded terminal document failures are acknowledged and do not reach the DLQ, since their outcome is already durably captured on the document row.
+
+## IAM split
+
+Scope policies to the dedicated queue ARN and document object prefix. Do not grant `sqs:*`, `s3:*`, or application access to send directly to the DLQ.
+
+The API task needs `sqs:SendMessage` on the main ingestion queue plus its Phase 2 S3 `PutObject`, `GetObject`, and rollback `DeleteObject` permissions on `<bucket>/uploads/*`.
+
+The worker task needs `sqs:ReceiveMessage` and `sqs:DeleteMessage` on the main queue plus `s3:GetObject` on `<bucket>/uploads/*`. It does not call `ChangeMessageVisibility` or `GetQueueAttributes`, so those permissions are not needed.
+
+## Running the worker
 
 ```bash
 cd backend
@@ -47,39 +105,10 @@ source .venv/bin/activate
 python -m app.workers.ingestion
 ```
 
-Or override the command of the same backend image used by the API:
+The same backend image supports the worker command. Disable or replace the image's API HTTP health check for worker containers. `python -m app.workers.ingestion --check` validates configuration without contacting SQS, PostgreSQL, Voyage, or Gemini.
 
-```bash
-docker run --rm --env-file backend/.env \
-  --health-cmd=none \
-  know-your-lease-api:phase3a \
-  python -m app.workers.ingestion
-```
+AWS queue/DLQ/IAM provisioning, automated DLQ replay, operator dashboards, visibility heartbeats, and cross-process Voyage rate coordination remain infrastructure/operations work; they are not implemented in application code.
 
-`python -m app.workers.ingestion --check` validates worker configuration without contacting SQS, PostgreSQL, Voyage, or Gemini. It is suitable for a local/container startup smoke test without an AWS account.
+## Current limitation: no re-ingestion producer
 
-The worker long-polls for one message at a time with `WaitTimeSeconds=20`. It validates the message, verifies the document exists using a fresh SQLAlchemy session, and calls `DocumentIngestionService.process_document`. That existing service marks the document `processing`, reads the PDF through `DocumentStorage`, runs the unchanged PyMuPDF/chunking/Voyage pipeline, and commits chunks plus `ready`. Each service operation creates its own database session; no FastAPI request session is involved.
-
-The SQS receipt is deleted only after the ingestion service reports success. A processing failure, missing document, malformed message, database error, or acknowledgement failure leaves the message undeleted. Queue polling errors use a five-second delay; empty receives naturally wait through SQS long polling.
-
-## IAM split
-
-Scope both policies to the dedicated queue ARN and document-object prefix; do not grant `sqs:*` or `s3:*`.
-
-The API task needs:
-
-- `sqs:SendMessage` on the ingestion queue.
-- `s3:PutObject` for upload, `s3:GetObject` for the PDF endpoint, and `s3:DeleteObject` for database-commit rollback, all on `<bucket>/uploads/*` when S3 storage is selected.
-
-The worker task needs:
-
-- `sqs:ReceiveMessage` and `sqs:DeleteMessage` on the ingestion queue.
-- `s3:GetObject` on `<bucket>/uploads/*` when S3 storage is selected.
-
-Phase 3A does not call `ChangeMessageVisibility` or `GetQueueAttributes`, so those permissions are not required. Boto3 uses its standard credential chain; future ECS tasks should receive these permissions through separate task roles rather than static access keys.
-
-## Delivery semantics and Phase 3B boundary
-
-SQS delivery is at least once. Phase 3A deliberately does not claim exactly-once processing or complete crash recovery. A successful ingestion followed by a failed delete can be delivered again, and malformed or permanently failing messages remain subject to the queue's configured visibility and redrive behavior.
-
-Phase 3B still needs retry classification/backoff policy, idempotency/versioning, DLQ and poison-message handling, distributed concurrency controls, visibility-timeout renewal where justified, and operational metrics/alarms. Those behaviors are not simulated in Phase 3A application code.
+`current_ingestion_version` and `completed_ingestion_version` exist to make ingestion idempotent, protect against stale/duplicate delivery, and resolve concurrent workers safely. Every document is created at version 1, and nothing in this phase increments `current_ingestion_version` past that. There is no re-ingestion API endpoint or other producer that requests a later version. Re-ingestion (for example, after a chunking/embedding model change) is deliberately deferred; the version machinery is ready for it, but wiring a producer is out of scope for Phase 3B.

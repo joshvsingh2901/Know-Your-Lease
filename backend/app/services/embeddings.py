@@ -26,7 +26,16 @@ class EmbeddingConfigurationError(EmbeddingError):
 
 
 class EmbeddingProviderError(EmbeddingError):
-    pass
+    def __init__(
+        self,
+        message: str,
+        *,
+        transient: bool = False,
+        error_code: str = "provider_unavailable",
+    ) -> None:
+        super().__init__(message)
+        self.transient = transient
+        self.error_code = error_code
 
 
 @dataclass(frozen=True)
@@ -149,8 +158,19 @@ class VoyageEmbeddingService:
             batches.append(_EmbeddingBatch(batch_texts, batch_tokens))
         return batches
 
-    @staticmethod
-    def _is_transient(exc: Exception) -> bool:
+    _TRANSIENT_VOYAGE_ERROR_TYPES: tuple[type[Exception], ...] = (
+        voyageai.error.RateLimitError,
+        voyageai.error.Timeout,
+        voyageai.error.TryAgain,
+        voyageai.error.APIConnectionError,
+        voyageai.error.ServerError,
+        voyageai.error.ServiceUnavailableError,
+    )
+
+    @classmethod
+    def _is_transient(cls, exc: Exception) -> bool:
+        if isinstance(exc, cls._TRANSIENT_VOYAGE_ERROR_TYPES):
+            return True
         status_code = (
             getattr(exc, "http_status", None)
             or getattr(exc, "status_code", None)
@@ -240,8 +260,15 @@ class VoyageEmbeddingService:
                         attempt + 1,
                         self.max_retries + 1,
                     )
+                    transient = self._is_transient(exc)
                     raise EmbeddingProviderError(
-                        "Voyage could not create document embeddings."
+                        "Voyage could not create document embeddings.",
+                        transient=transient,
+                        error_code=(
+                            "provider_rate_limit"
+                            if status_code == 429
+                            else "provider_unavailable"
+                        ),
                     ) from exc
                 provider_delay = self._retry_after_seconds(exc) or 0.0
                 delay = max(

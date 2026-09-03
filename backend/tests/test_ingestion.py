@@ -6,7 +6,7 @@ from sqlalchemy import func, select
 from app.models.answer_cache import GroundedAnswerCache
 from app.models.document import Document, DocumentStatus
 from app.models.document_chunk import DocumentChunk
-from app.services.document_ingestion import DocumentIngestionService
+from app.services.document_ingestion import DocumentIngestionService, IngestionOutcome
 from app.services.embeddings import EmbeddingProviderError
 from app.services.storage import DocumentStorage, LocalDocumentStorage
 
@@ -78,7 +78,7 @@ def test_valid_pdf_becomes_ready_with_document_scoped_chunks(
         embedding_service=FakeEmbeddingService(),
     )
 
-    assert service.process_document(document_id) is True
+    assert service.process_document(document_id) == IngestionOutcome.COMPLETED
     assert storage.read_keys == [f"uploads/{document_id}.pdf"]
 
     with session_factory() as db:
@@ -102,7 +102,7 @@ def test_valid_pdf_becomes_ready_with_document_scoped_chunks(
         ) == 0
 
 
-def test_embedding_failure_marks_failed_and_removes_partial_index(
+def test_embedding_failure_marks_failed_and_preserves_previous_index(
     tmp_path: Path,
     make_pdf,
     session_factory,
@@ -131,7 +131,7 @@ def test_embedding_failure_marks_failed_and_removes_partial_index(
         storage=storage,
         embedding_service=FailingEmbeddingService(),
     )
-    assert service.process_document(document_id) is False
+    assert service.process_document(document_id) == IngestionOutcome.TERMINAL_FAILURE
 
     with session_factory() as db:
         document = db.get(Document, document_id)
@@ -144,7 +144,7 @@ def test_embedding_failure_marks_failed_and_removes_partial_index(
         assert document.status == DocumentStatus.FAILED
         assert document.error_message is not None
         assert "embedding service" in document.error_message
-        assert chunk_count == 0
+        assert chunk_count == 1
 
 
 def test_extraction_failure_marks_failed(tmp_path: Path, make_pdf, session_factory) -> None:
@@ -157,7 +157,7 @@ def test_extraction_failure_marks_failed(tmp_path: Path, make_pdf, session_facto
         embedding_service=FakeEmbeddingService(),
     )
 
-    assert service.process_document(document_id) is False
+    assert service.process_document(document_id) == IngestionOutcome.TERMINAL_FAILURE
 
     with session_factory() as db:
         document = db.get(Document, document_id)
@@ -165,3 +165,4 @@ def test_extraction_failure_marks_failed(tmp_path: Path, make_pdf, session_facto
         assert document.status == DocumentStatus.FAILED
         assert document.error_message is not None
         assert "OCR" in document.error_message
+        assert document.last_ingestion_error_code == "invalid_pdf"

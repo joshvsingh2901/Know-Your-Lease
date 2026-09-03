@@ -59,8 +59,8 @@ POST /documents
   ↓ validate filename, media type, %PDF- signature, and size
 Persist bytes atomically under a UUID storage key
   ↓
-Insert Document(status=queued) in SQS mode
-  ↓ publish {version, document_id} and return 201
+Insert Document(status=queued, current_ingestion_version=1) in SQS mode
+  ↓ publish {version, document_id, ingestion_version} and return 201
 Standalone worker long-polls and validates the message
   ↓
 Document(status=processing)
@@ -70,7 +70,7 @@ Extract pages → normalize → chunk → embed
 Delete any stale chunks → insert complete new index → status=ready
 ```
 
-Any extraction, embedding, or persistence failure removes chunk rows for that document and records `failed` plus a short safe message. A `ready` status therefore means that all chunk text, provenance, and vectors were persisted successfully.
+A retryable extraction dependency or persistence failure returns the document to `queued`; a permanent document failure records `failed` plus a short safe message. Existing committed chunks remain untouched until one final transaction replaces them, invalidates cache entries, records the completed ingestion version, and marks `ready`. A `ready` status therefore means that the complete chunk text, provenance, and vectors were persisted successfully for the current version.
 
 ## Question lifecycle
 
@@ -119,7 +119,7 @@ Page numbers, section titles, snippets, similarity scores, and chunk IDs are map
 
 ## Processing boundary
 
-`INGESTION_MODE=inline` retains FastAPI `BackgroundTasks` for AWS-free development. `INGESTION_MODE=sqs` makes the request process publish only a versioned document identifier; a standalone worker with independent database sessions invokes the unchanged ingestion service and deletes the receipt only on success. SQS provides at-least-once delivery, but Phase 3A does not yet add idempotency, application retry classification, DLQ/poison-message handling, distributed locks, or cross-process provider rate coordination.
+`INGESTION_MODE=inline` retains FastAPI `BackgroundTasks` for AWS-free development. `INGESTION_MODE=sqs` makes the request process publish only a versioned document identifier; a standalone worker with independent database sessions invokes the unchanged ingestion pipeline. Atomic claims, ingestion/attempt versions, row-locked completion checks, and the existing chunk uniqueness constraint make duplicate delivery safe. Completed, stale, and recorded-terminal-failure messages are acknowledged, since each of those outcomes is already durably persisted on the document row; retryable, malformed, missing, future-version, and busy messages remain for SQS redelivery/redrive. This is at-least-once delivery plus idempotent processing, not exactly-once delivery.
 
 ## Deployment boundary
 
@@ -131,4 +131,4 @@ Provider and database exceptions never flow directly into API responses. Known p
 
 Configuration masks database/provider secrets in settings representations. Startup validation keeps development key-optional, while production requires explicit database/provider settings, an HTTPS non-loopback frontend origin, and disabled debug endpoints. Local storage must remain outside `frontend/public`; S3 mode requires bucket and region. CORS accepts validated explicit HTTP(S) origins only: configured local origins in development and only `FRONTEND_ORIGIN` outside development. Chunk/retrieval debug endpoints default on only in development and return 404 when disabled.
 
-The current system does not provide authentication/user ownership, provisioned S3/SQS infrastructure or lifecycle/KMS/redrive policy, Phase 3B idempotency and retry hardening, OCR, cross-process rate limiting, chat history, query rewriting, reranking, hybrid/full-text retrieval, coordinate-level PDF highlights, or a calibrated relevance threshold. Text-layer highlighting is best-effort because PDFs can expose text with imperfect spacing. Abstention relies on evidence-limited prompting plus strict source-ID validation, not a calibrated score cutoff or a second faithfulness model. It is not safe for multi-user exposure until authenticated ownership is added centrally.
+The current system does not provide authentication/user ownership, provisioned S3/SQS infrastructure or lifecycle/KMS/redrive policy, automated DLQ replay, visibility heartbeats, OCR, cross-process rate limiting, chat history, query rewriting, reranking, hybrid/full-text retrieval, coordinate-level PDF highlights, or a calibrated relevance threshold. Text-layer highlighting is best-effort because PDFs can expose text with imperfect spacing. Abstention relies on evidence-limited prompting plus strict source-ID validation, not a calibrated score cutoff or a second faithfulness model. It is not safe for multi-user exposure until authenticated ownership is added centrally.

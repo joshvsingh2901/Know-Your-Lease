@@ -4,8 +4,10 @@ import uuid
 import boto3
 import pytest
 from botocore.stub import Stubber
+from pydantic import ValidationError
 
 from app.services.ingestion_queue import (
+    IngestionMessage,
     IngestionQueueError,
     SQSIngestionQueue,
     SQSIngestionQueueConsumer,
@@ -37,12 +39,16 @@ def test_sqs_queue_serializes_versioned_document_identifier(sqs_client) -> None:
             {
                 "QueueUrl": QUEUE_URL,
                 "MessageBody": json.dumps(
-                    {"version": 1, "document_id": str(document_id)},
+                    {
+                        "version": 1,
+                        "document_id": str(document_id),
+                        "ingestion_version": 1,
+                    },
                     separators=(",", ":"),
                 ),
             },
         )
-        queue.enqueue(document_id)
+        queue.enqueue(document_id, 1)
 
 
 def test_sqs_send_failure_maps_to_safe_queue_error(sqs_client) -> None:
@@ -58,14 +64,18 @@ def test_sqs_send_failure_maps_to_safe_queue_error(sqs_client) -> None:
             expected_params={
                 "QueueUrl": QUEUE_URL,
                 "MessageBody": json.dumps(
-                    {"version": 1, "document_id": str(document_id)},
+                    {
+                        "version": 1,
+                        "document_id": str(document_id),
+                        "ingestion_version": 1,
+                    },
                     separators=(",", ":"),
                 ),
             },
         )
 
         with pytest.raises(IngestionQueueError) as exc_info:
-            queue.enqueue(document_id)
+            queue.enqueue(document_id, 1)
 
     assert str(exc_info.value) == "The ingestion request could not be queued."
     assert "private provider detail" not in str(exc_info.value)
@@ -73,7 +83,9 @@ def test_sqs_send_failure_maps_to_safe_queue_error(sqs_client) -> None:
 
 def test_sqs_consumer_long_polls_one_message_and_deletes_it(sqs_client) -> None:
     consumer = SQSIngestionQueueConsumer(client=sqs_client, queue_url=QUEUE_URL)
-    body = json.dumps({"version": 1, "document_id": str(uuid.uuid4())})
+    body = json.dumps(
+        {"version": 1, "document_id": str(uuid.uuid4()), "ingestion_version": 1}
+    )
 
     with Stubber(sqs_client) as stubber:
         stubber.add_response(
@@ -104,3 +116,21 @@ def test_sqs_consumer_long_polls_one_message_and_deletes_it(sqs_client) -> None:
         assert received.body == body
         assert received.message_id == "message-id"
         consumer.delete(received.receipt_handle)
+
+
+def test_phase3a_message_defaults_to_first_ingestion_version() -> None:
+    document_id = uuid.uuid4()
+
+    message = IngestionMessage.model_validate(
+        {"version": 1, "document_id": str(document_id)}
+    )
+
+    assert message.ingestion_version == 1
+
+
+def test_non_positive_ingestion_version_is_rejected() -> None:
+    with pytest.raises(ValidationError, match="ingestion_version"):
+        IngestionMessage(
+            document_id=uuid.uuid4(),
+            ingestion_version=0,
+        )

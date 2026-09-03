@@ -25,9 +25,18 @@ class PassiveIngestionService:
     def __init__(self, storage: DocumentStorage) -> None:
         self.storage = storage
         self.requested_documents: list[uuid.UUID] = []
+        self.requested_versions: list[int] = []
+        self.requested_durable_retries: list[bool] = []
 
-    def process_document(self, document_id: uuid.UUID) -> bool:
+    def process_document(
+        self,
+        document_id: uuid.UUID,
+        ingestion_version: int = 1,
+        durable_retries: bool = True,
+    ) -> bool:
         self.requested_documents.append(document_id)
+        self.requested_versions.append(ingestion_version)
+        self.requested_durable_retries.append(durable_retries)
         return True
 
 

@@ -63,7 +63,11 @@ def main() -> int:
         storage.delete(storage_key)
         raise
 
-    succeeded = DocumentIngestionService(storage=storage).process_document(document_id)
+    outcome = DocumentIngestionService(storage=storage).process_document(
+        document_id,
+        1,
+        durable_retries=False,
+    )
     with SessionLocal() as db:
         document = db.get(Document, document_id)
         chunk_count = db.scalar(
@@ -86,7 +90,7 @@ def main() -> int:
     print(f"pages={','.join(str(page) for page in page_numbers)}")
     if document.error_message:
         print(f"error={document.error_message}")
-    return 0 if succeeded and document.status == DocumentStatus.READY else 1
+    return 0 if outcome.acknowledge and document.status == DocumentStatus.READY else 1
 
 
 if __name__ == "__main__":

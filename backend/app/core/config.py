@@ -26,6 +26,11 @@ class Settings(BaseSettings):
     max_upload_size_mb: int = Field(default=20, gt=0, le=1_024)
     ingestion_mode: Literal["inline", "sqs"] = "inline"
     sqs_ingestion_queue_url: str | None = None
+    ingestion_processing_timeout_seconds: int = Field(
+        default=900,
+        ge=60,
+        le=43_200,
+    )
     document_storage_backend: Literal["local", "s3"] = "local"
     pdf_storage_dir: Path = BACKEND_DIR / "storage"
     s3_bucket_name: str | None = None
