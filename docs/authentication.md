@@ -174,7 +174,7 @@ sign-in wall, and `lib/api.ts` attaches no `Authorization` header.
 
 ## Production requirements
 
-`ENVIRONMENT=production` startup validation (`validate_runtime_settings`) fails
+`ENVIRONMENT=production` API startup validation (`validate_api_runtime_settings`) fails
 closed if `AUTH_MODE` is unset or is anything other than `cognito`, and
 `AUTH_MODE=cognito` itself requires `COGNITO_REGION`, `COGNITO_USER_POOL_ID`, and
 `COGNITO_APP_CLIENT_ID` to be set (`COGNITO_ISSUER` is optional and is derived from

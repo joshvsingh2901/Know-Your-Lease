@@ -25,7 +25,7 @@ PDF_STORAGE_DIR=./storage
 
 Local writes remain atomic through a temporary `.part` file and rename. Keys must match the UUID-owned `uploads/<uuid>.pdf` format, and resolved paths cannot leave the configured uploads root.
 
-Production must set `DOCUMENT_STORAGE_BACKEND` explicitly, preventing an AWS task from silently falling back to its ephemeral filesystem. The value may still be `local` for the existing single-instance Railway volume deployment, but AWS production should select `s3`.
+The production API and worker require `DOCUMENT_STORAGE_BACKEND=s3`, preventing an AWS task from silently falling back to its ephemeral filesystem. Local storage remains available for development and tests.
 
 S3 mode requires:
 

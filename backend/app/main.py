@@ -4,9 +4,9 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.routes import documents, health
-from app.core.config import settings, validate_runtime_settings
+from app.core.config import settings, validate_api_runtime_settings
 
-validate_runtime_settings(settings)
+validate_api_runtime_settings(settings)
 
 logging.basicConfig(
     level=logging.INFO,

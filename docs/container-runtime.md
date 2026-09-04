@@ -38,17 +38,18 @@ docker run --rm --name know-your-lease-api \
 
 ## Runtime configuration
 
-Configuration is supplied only at runtime. No `.env` file or secret is copied into the image. Production requires:
+Configuration is supplied only at runtime. No `.env` file or secret is copied into the image. The production API requires:
 
 - `ENVIRONMENT=production`
 - `DATABASE_URL` for PostgreSQL with pgvector
 - `FRONTEND_ORIGIN` as the exact public HTTPS frontend origin
 - `VOYAGE_API_KEY` and `GEMINI_API_KEY`
 - `DEBUG_ENDPOINTS_ENABLED=false`
-- explicit `INGESTION_MODE=inline|sqs`
-- explicit `DOCUMENT_STORAGE_BACKEND=local|s3`
+- `INGESTION_MODE=sqs`, `SQS_INGESTION_QUEUE_URL`, and `AWS_REGION`
+- `DOCUMENT_STORAGE_BACKEND=s3`, `S3_BUCKET_NAME`, and `AWS_REGION`
+- `AUTH_MODE=cognito` plus its pool and public app-client identifiers
 
-`DOCUMENT_STORAGE_BACKEND=local` uses `PDF_STORAGE_DIR` as the writable PDF root (the image default resolves to `/app/storage`). `DOCUMENT_STORAGE_BACKEND=s3` instead requires `S3_BUCKET_NAME` and `AWS_REGION`; boto3 resolves credentials at runtime, so none are copied into the image. `PORT`, model names, upload limits, provider pacing, answer-cache version, and the other existing settings remain environment-configurable. Development and tests may omit provider keys when calls are mocked or those features are unused.
+The production worker requires only its database URL, S3/SQS settings, processing timeout, and Voyage key. The production migration task requires only its database URL. `DOCUMENT_STORAGE_BACKEND=local` and `INGESTION_MODE=inline` remain local-development modes. Boto3 resolves credentials at runtime, so none are copied into the image. `PORT`, model names, upload limits, provider pacing, answer-cache version, and the other existing settings remain environment-configurable. Development and tests may omit provider keys when calls are mocked or those features are unused. See [AWS deployment preparation](aws-deployment.md) for the exact workload map.
 
 The runtime user is the unprivileged numeric UID/GID `10001:10001`. Only `/app/storage` is prepared as application-writable; application code and dependencies remain read-only to that user. Mount a volume at the configured storage path when PDFs must survive container replacement.
 
@@ -75,7 +76,7 @@ The same image supports the default Uvicorn API command and the Phase 3A worker 
 python -m app.workers.ingestion
 ```
 
-Use `python -m app.workers.ingestion --check` for an offline configuration/startup check. A worker container must disable or replace the image's API `/health` Docker health check because it does not expose HTTP. ECR/ECS resources are not provisioned by this repository.
+Use `python -m app.workers.ingestion --check` for an offline worker-specific configuration check. It exits before constructing external clients and does not need Cognito, frontend, or Gemini configuration. A worker container must disable or replace the image's API `/health` Docker health check because it does not expose HTTP. ECR/ECS resources are not provisioned by this repository.
 
 ## Image design
 

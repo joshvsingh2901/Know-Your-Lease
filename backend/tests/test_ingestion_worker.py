@@ -1,9 +1,11 @@
+import sys
 import uuid
 from typing import BinaryIO
 
 import pytest
 from sqlalchemy import select
 
+from app.core.config import Settings
 from app.models.document import Document, DocumentStatus
 from app.models.document_chunk import DocumentChunk
 from app.services.chunking import ChunkDraft
@@ -15,6 +17,7 @@ from app.services.ingestion_queue import (
 )
 from app.services.pdf_extraction import ExtractedPage
 from app.services.storage import DocumentStorage
+from app.workers import ingestion as ingestion_worker
 from app.workers.ingestion import IngestionWorker
 
 
@@ -84,6 +87,33 @@ def queued_message(
         receipt_handle="receipt-handle",
         message_id="message-id",
     )
+
+
+def test_worker_check_validates_without_api_secrets_or_external_clients(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config = Settings(
+        _env_file=None,
+        environment="production",
+        database_url="postgresql+psycopg://worker:password@db.example/leases",
+        document_storage_backend="s3",
+        s3_bucket_name="lease-documents",
+        aws_region="ca-central-1",
+        ingestion_mode="sqs",
+        sqs_ingestion_queue_url=(
+            "https://sqs.ca-central-1.amazonaws.com/123/ingestion"
+        ),
+        voyage_api_key="example-voyage-key",
+    )
+    monkeypatch.setattr(ingestion_worker, "settings", config)
+    monkeypatch.setattr(sys, "argv", ["app.workers.ingestion", "--check"])
+    monkeypatch.setattr(
+        ingestion_worker,
+        "create_worker",
+        lambda: pytest.fail("health check must not construct external clients"),
+    )
+
+    ingestion_worker.main()
 
 
 def test_worker_runs_existing_ingestion_with_storage_and_acknowledges_success(

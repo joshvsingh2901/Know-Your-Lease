@@ -7,7 +7,7 @@ from collections.abc import Callable
 
 from pydantic import ValidationError
 
-from app.core.config import settings, validate_runtime_settings
+from app.core.config import settings, validate_worker_runtime_settings
 from app.services.document_ingestion import (
     DocumentIngestionService,
     IngestionOutcome,
@@ -135,9 +135,7 @@ def main() -> None:
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
     arguments = _arguments()
-    validate_runtime_settings(settings)
-    if settings.ingestion_mode != "sqs":
-        raise SystemExit("The ingestion worker requires INGESTION_MODE=sqs.")
+    validate_worker_runtime_settings(settings)
     if arguments.check:
         logger.info("Ingestion worker configuration is valid")
         return

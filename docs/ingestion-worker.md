@@ -105,9 +105,11 @@ source .venv/bin/activate
 python -m app.workers.ingestion
 ```
 
-The same backend image supports the worker command. Disable or replace the image's API HTTP health check for worker containers. `python -m app.workers.ingestion --check` validates configuration without contacting SQS, PostgreSQL, Voyage, or Gemini.
+The same backend image supports the API, worker, and migration commands. ECS must replace the image's API HTTP health check for worker containers. `python -m app.workers.ingestion --check` applies worker-specific configuration validation and exits without constructing clients or contacting SQS, S3, PostgreSQL, Voyage, Gemini, or Cognito.
 
-AWS queue/DLQ/IAM provisioning, automated DLQ replay, operator dashboards, visibility heartbeats, and cross-process Voyage rate coordination remain infrastructure/operations work; they are not implemented in application code.
+In production the worker requires `DATABASE_URL`, `DOCUMENT_STORAGE_BACKEND=s3`, `S3_BUCKET_NAME`, `AWS_REGION`, `INGESTION_MODE=sqs`, `SQS_INGESTION_QUEUE_URL`, the bounded `INGESTION_PROCESSING_TIMEOUT_SECONDS`, and `VOYAGE_API_KEY`. It deliberately does not require `FRONTEND_ORIGIN`, Cognito settings, `GEMINI_API_KEY`, or API-only debug/cache configuration. Database and Voyage values are secrets; bucket, region, queue, mode, and timeout values are non-secret task environment. See [AWS deployment preparation](aws-deployment.md) for the exact task map.
+
+AWS queue/DLQ/IAM provisioning, automated DLQ replay, operator dashboards, visibility heartbeats, and cross-process Voyage rate coordination remain infrastructure/operations work; Phase 6A does not create or deploy them.
 
 ## Current limitation: no re-ingestion producer
 

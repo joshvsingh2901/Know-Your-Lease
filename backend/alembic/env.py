@@ -3,11 +3,12 @@ from logging.config import fileConfig
 from sqlalchemy import engine_from_config, pool
 
 from alembic import context
-from app.core.config import settings
+from app.core.config import settings, validate_migration_runtime_settings
 from app.core.database import Base
 from app.models import Document, DocumentChunk, GroundedAnswerCache  # noqa: F401
 
 config = context.config
+validate_migration_runtime_settings(settings)
 database_url = settings.database_url_value()
 config.set_main_option("sqlalchemy.url", database_url.replace("%", "%%"))
 

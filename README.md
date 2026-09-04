@@ -94,7 +94,7 @@ Gemini never supplies trusted page numbers. The backend maps returned source IDs
 | Retrieval | PostgreSQL, pgvector, exact cosine search |
 | Generation | Gemini structured JSON via the Google GenAI SDK |
 | Persistence | PostgreSQL, local/S3 UUID-owned PDF storage, verified-answer cache |
-| Deployment foundation | Vercel/Railway local-inline path; AWS-ready S3/SQS API-worker boundaries |
+| Deployment foundation | Vercel plus a prepared AWS ECS/Fargate API-worker-migration boundary |
 
 The project intentionally avoids LangChain, LlamaIndex, a second vector database, semantic caching, and an additional LLM verification call. Those components are deferred until evaluation demonstrates a concrete need.
 
@@ -106,7 +106,7 @@ The project intentionally avoids LangChain, LlamaIndex, a second vector database
 - Unknown model source IDs reject the response; page and chunk metadata remain backend-owned.
 - PDFs use generated UUID storage keys in local or private S3 storage; APIs expose neither paths nor bucket details.
 - Provider/database secrets use masked configuration, and local `.env` files are ignored.
-- Production configuration rejects wildcard CORS, non-HTTPS frontend origins, enabled debug routes, missing provider keys, unsafe local paths, incomplete S3 settings, and a missing/disabled `AUTH_MODE`.
+- API production configuration requires S3, SQS, Cognito, an exact HTTPS frontend origin, both provider keys, and disabled debug routes. Worker and migration validation are narrower so those tasks do not receive API-only configuration or secrets.
 - Every document route passes through one centralized access seam that enforces per-user document ownership; unowned/another user's document returns 404, never 403.
 
 Every document belongs to exactly one authenticated user. Browser `localStorage` remembers an active document UUID for convenience only, never as authorization — the backend re-checks ownership on every request. This repository implements Cognito verification and ownership enforcement in code but does not provision or run a live Cognito user pool; see [docs/authentication.md](docs/authentication.md).
@@ -125,8 +125,8 @@ backend/scripts/                Retrieval evaluation and local-development backf
 backend/evaluation/             Retrieval labels and evaluation tooling
 backend/tests/                  Offline provider-mocked regression suite
 docs/                           Architecture, decisions, evaluation, deployment, and auth
-railway.toml                    Railway build, migration, startup, and health config
-backend/Dockerfile              Production-oriented API/migration runtime image
+railway.toml                    Retained legacy Railway runtime configuration
+backend/Dockerfile              Shared API, worker, and migration runtime image
 ```
 
 ## Local Setup
@@ -178,7 +178,7 @@ See [docs/authentication.md](docs/authentication.md) for the full Cognito flow, 
 
 ### Containerized backend
 
-The production-oriented backend image runs Uvicorn as a non-root user, reads all configuration at runtime, includes Alembic migrations, and keeps application startup separate from schema migration:
+The production-oriented backend image runs Uvicorn as a non-root user, reads all configuration at runtime, includes the worker and Alembic migrations, and keeps application startup separate from schema migration:
 
 ```bash
 docker compose up -d database
@@ -188,7 +188,7 @@ docker compose up -d api
 curl http://localhost:8000/health
 ```
 
-This Compose path is optional; the native reload workflow above remains unchanged. See the [backend container runtime](docs/container-runtime.md) for direct build/run commands, required production variables, health semantics, storage permissions, migration ordering, and future ECR/ECS reuse.
+This Compose path is optional; the native reload workflow above remains unchanged. The same image can run the API default command, `python -m app.workers.ingestion`, or `alembic upgrade head`. See the [backend container runtime](docs/container-runtime.md) and [AWS deployment preparation](docs/aws-deployment.md) for workload-specific configuration and command behavior.
 
 ## API Surface
 
@@ -205,17 +205,9 @@ All routes other than `/health` require `Authorization: Bearer <token>` when `AU
 
 ## Deployment
 
-The repository includes supported deployment configuration but does **not** claim a currently hosted deployment:
+Phase 6A prepares, but does not provision, the approved production target: a Vercel frontend, Cognito PKCE login, an HTTPS ALB, separate ECS/Fargate API and worker services, a one-off migration task, RDS PostgreSQL with pgvector, private S3 storage, SQS with a DLQ, ECR, IAM task roles, and Secrets Manager in `ca-central-1`.
 
-- Vercel project rooted at `frontend/`
-- Railway API service rooted at `backend/`
-- Railway PostgreSQL with pgvector
-- Railway persistent volume mounted at `/data/documents`
-- Alembic pre-deploy migrations, Uvicorn on Railway's assigned `PORT`, and `/health` gating
-
-See the [deployment runbook](docs/deployment.md) for exact settings and environment variables.
-The Phase 1 Docker image is a reusable runtime foundation only; no ECR or ECS deployment is implemented yet.
-The API supports private S3 document storage and SQS-backed ingestion, but the repository does not provision buckets, queues, IAM roles, or an AWS runtime.
+The API, worker, and migration task use the same Docker image with workload-specific validation and least-secret configuration. See the [deployment overview](docs/deployment.md) and [AWS deployment preparation](docs/aws-deployment.md) for the exact configuration map. No AWS resources or hosted deployment currently exist; Phase 6B provisioning remains pending.
 
 ## Testing
 
@@ -266,4 +258,4 @@ for the job design, migration policy, local commands, and branch-protection step
 - No chat history or follow-up question rewriting
 - Best-effort text-layer highlighting rather than coordinate-level highlights
 
-Further detail: [architecture](docs/architecture.md), [authentication](docs/authentication.md), [document storage](docs/document-storage.md), [RAG decisions](docs/rag-decisions.md), [retrieval evaluation](docs/retrieval-evaluation.md), and [production hardening](docs/production-hardening.md).
+Further detail: [architecture](docs/architecture.md), [AWS deployment preparation](docs/aws-deployment.md), [authentication](docs/authentication.md), [document storage](docs/document-storage.md), [RAG decisions](docs/rag-decisions.md), [retrieval evaluation](docs/retrieval-evaluation.md), and [production hardening](docs/production-hardening.md).

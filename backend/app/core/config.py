@@ -202,14 +202,8 @@ def _validated_origin(value: str, setting_name: str) -> str:
     return origin
 
 
-def validate_runtime_settings(config: Settings) -> None:
+def _storage_configuration_problems(config: Settings) -> list[str]:
     problems: list[str] = []
-    try:
-        origins = config.cors_origins
-    except ValueError as exc:
-        origins = []
-        problems.append(str(exc))
-
     if config.document_storage_backend == "local":
         frontend_public = (PROJECT_DIR / "frontend" / "public").resolve()
         storage_root = config.pdf_storage_dir.resolve()
@@ -218,12 +212,45 @@ def validate_runtime_settings(config: Settings) -> None:
     elif not config.s3_bucket_name or not config.aws_region:
         problems.append("S3 storage requires S3_BUCKET_NAME and AWS_REGION to be set.")
 
+    return problems
+
+
+def _queue_configuration_problems(config: Settings) -> list[str]:
     if config.ingestion_mode == "sqs" and (
         not config.sqs_ingestion_queue_url or not config.aws_region
     ):
-        problems.append(
+        return [
             "SQS ingestion requires SQS_INGESTION_QUEUE_URL and AWS_REGION to be set."
+        ]
+    return []
+
+
+def _production_database_problems(config: Settings) -> list[str]:
+    if (
+        config.environment == "production"
+        and config.database_url_value() == DEFAULT_DATABASE_URL
+    ):
+        return ["Production DATABASE_URL must be set explicitly."]
+    return []
+
+
+def _raise_configuration_errors(workload: str, problems: list[str]) -> None:
+    if problems:
+        raise RuntimeError(
+            f"Invalid {workload} configuration: " + " ".join(problems)
         )
+
+
+def validate_api_runtime_settings(config: Settings) -> None:
+    problems: list[str] = []
+    try:
+        origins = config.cors_origins
+    except ValueError as exc:
+        origins = []
+        problems.append(str(exc))
+
+    problems.extend(_storage_configuration_problems(config))
+    problems.extend(_queue_configuration_problems(config))
 
     if config.auth_mode == "cognito" and (
         not config.cognito_region
@@ -238,8 +265,12 @@ def validate_runtime_settings(config: Settings) -> None:
     if config.environment == "production":
         if "document_storage_backend" not in config.model_fields_set:
             problems.append("Production DOCUMENT_STORAGE_BACKEND must be set explicitly.")
+        elif config.document_storage_backend != "s3":
+            problems.append("Production API DOCUMENT_STORAGE_BACKEND must be s3.")
         if "ingestion_mode" not in config.model_fields_set:
             problems.append("Production INGESTION_MODE must be set explicitly.")
+        elif config.ingestion_mode != "sqs":
+            problems.append("Production API INGESTION_MODE must be sqs.")
         if "auth_mode" not in config.model_fields_set:
             problems.append("Production AUTH_MODE must be set explicitly.")
         if config.auth_mode != "cognito":
@@ -251,8 +282,7 @@ def validate_runtime_settings(config: Settings) -> None:
             problems.append("Production FRONTEND_ORIGIN must not use a loopback host.")
         if parsed_origin and parsed_origin.scheme != "https":
             problems.append("Production FRONTEND_ORIGIN must use HTTPS.")
-        if config.database_url_value() == DEFAULT_DATABASE_URL:
-            problems.append("Production DATABASE_URL must be set explicitly.")
+        problems.extend(_production_database_problems(config))
         if not config.voyage_api_key or not config.voyage_api_key.get_secret_value():
             problems.append("Production VOYAGE_API_KEY is required.")
         if not config.gemini_api_key or not config.gemini_api_key.get_secret_value():
@@ -260,8 +290,38 @@ def validate_runtime_settings(config: Settings) -> None:
         if config.debug_endpoints_allowed:
             problems.append("DEBUG_ENDPOINTS_ENABLED must be false in production.")
 
-    if problems:
-        raise RuntimeError("Invalid application configuration: " + " ".join(problems))
+    _raise_configuration_errors("API", problems)
+
+
+def validate_worker_runtime_settings(config: Settings) -> None:
+    problems = _storage_configuration_problems(config)
+    problems.extend(_queue_configuration_problems(config))
+
+    if config.ingestion_mode != "sqs":
+        problems.append("The ingestion worker requires INGESTION_MODE=sqs.")
+
+    if config.environment == "production":
+        problems.extend(_production_database_problems(config))
+        if "document_storage_backend" not in config.model_fields_set:
+            problems.append("Production DOCUMENT_STORAGE_BACKEND must be set explicitly.")
+        elif config.document_storage_backend != "s3":
+            problems.append("Production worker DOCUMENT_STORAGE_BACKEND must be s3.")
+        if not config.voyage_api_key or not config.voyage_api_key.get_secret_value():
+            problems.append("Production worker VOYAGE_API_KEY is required.")
+
+    _raise_configuration_errors("worker", problems)
+
+
+def validate_migration_runtime_settings(config: Settings) -> None:
+    problems: list[str] = []
+    if "database_url" not in config.model_fields_set:
+        problems.append("Migration DATABASE_URL must be set explicitly.")
+    else:
+        problems.extend(_production_database_problems(config))
+    _raise_configuration_errors(
+        "migration",
+        problems,
+    )
 
 
 @lru_cache
