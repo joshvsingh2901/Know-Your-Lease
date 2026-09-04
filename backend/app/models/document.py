@@ -3,7 +3,16 @@ import uuid
 from datetime import datetime
 from typing import TYPE_CHECKING
 
-from sqlalchemy import CheckConstraint, DateTime, Enum, Integer, String, Uuid, func
+from sqlalchemy import (
+    CheckConstraint,
+    DateTime,
+    Enum,
+    ForeignKey,
+    Integer,
+    String,
+    Uuid,
+    func,
+)
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.database import Base
@@ -11,6 +20,7 @@ from app.core.database import Base
 if TYPE_CHECKING:
     from app.models.answer_cache import GroundedAnswerCache
     from app.models.document_chunk import DocumentChunk
+    from app.models.user import User
 
 
 class DocumentStatus(str, enum.Enum):
@@ -39,6 +49,12 @@ class Document(Base):
     )
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    owner_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid,
+        ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=True,
+        index=True,
+    )
     original_filename: Mapped[str] = mapped_column(String(255), nullable=False)
     storage_key: Mapped[str | None] = mapped_column(String(512), nullable=True)
     error_message: Mapped[str | None] = mapped_column(String(500), nullable=True)
@@ -91,3 +107,4 @@ class Document(Base):
     answer_cache_entries: Mapped[list["GroundedAnswerCache"]] = relationship(
         back_populates="document", cascade="all, delete-orphan"
     )
+    owner: Mapped["User | None"] = relationship(back_populates="documents")

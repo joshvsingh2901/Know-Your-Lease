@@ -49,6 +49,10 @@ def test_production_configuration_requires_explicit_safe_values(tmp_path: Path) 
         ingestion_mode="inline",
         document_storage_backend="local",
         pdf_storage_dir=tmp_path / "storage",
+        auth_mode="cognito",
+        cognito_region="ca-central-1",
+        cognito_user_pool_id="ca-central-1_example",
+        cognito_app_client_id="example-client-id",
     )
 
     validate_runtime_settings(config)
@@ -73,6 +77,7 @@ def test_unsafe_production_defaults_fail_without_echoing_secrets() -> None:
     assert "Production DATABASE_URL" in message
     assert "Production DOCUMENT_STORAGE_BACKEND" in message
     assert "Production INGESTION_MODE" in message
+    assert "Production AUTH_MODE" in message
     assert "DEBUG_ENDPOINTS_ENABLED" in message
     assert "private-voyage-key" not in message
     assert "private-gemini-key" not in message
@@ -185,6 +190,77 @@ def test_sqs_ingestion_configuration_is_normalized_and_valid() -> None:
 def test_invalid_ingestion_mode_fails_clearly() -> None:
     with pytest.raises(ValidationError, match="ingestion_mode"):
         Settings(_env_file=None, ingestion_mode="celery")
+
+
+def test_cognito_auth_requires_region_pool_and_client() -> None:
+    config = Settings(_env_file=None, auth_mode="cognito")
+
+    with pytest.raises(
+        RuntimeError,
+        match="COGNITO_REGION, COGNITO_USER_POOL_ID, and COGNITO_APP_CLIENT_ID",
+    ):
+        validate_runtime_settings(config)
+
+
+def test_cognito_auth_configuration_is_normalized_and_valid() -> None:
+    config = Settings(
+        _env_file=None,
+        auth_mode=" Cognito ",
+        cognito_region=" ca-central-1 ",
+        cognito_user_pool_id=" ca-central-1_example ",
+        cognito_app_client_id=" example-client-id ",
+    )
+
+    validate_runtime_settings(config)
+
+    assert config.auth_mode == "cognito"
+    assert config.cognito_region == "ca-central-1"
+    assert config.cognito_user_pool_id == "ca-central-1_example"
+    assert config.cognito_app_client_id == "example-client-id"
+    assert config.cognito_issuer_url == (
+        "https://cognito-idp.ca-central-1.amazonaws.com/ca-central-1_example"
+    )
+    assert config.cognito_jwks_url == (
+        "https://cognito-idp.ca-central-1.amazonaws.com/ca-central-1_example"
+        "/.well-known/jwks.json"
+    )
+
+
+def test_explicit_cognito_issuer_overrides_derived_issuer() -> None:
+    config = Settings(
+        _env_file=None,
+        cognito_region="ca-central-1",
+        cognito_user_pool_id="ca-central-1_example",
+        cognito_issuer="https://issuer.example.com/custom",
+    )
+
+    assert config.cognito_issuer_url == "https://issuer.example.com/custom"
+    assert config.cognito_jwks_url == (
+        "https://issuer.example.com/custom/.well-known/jwks.json"
+    )
+
+
+def test_invalid_auth_mode_fails_clearly() -> None:
+    with pytest.raises(ValidationError, match="auth_mode"):
+        Settings(_env_file=None, auth_mode="basic")
+
+
+def test_production_auth_mode_must_be_cognito() -> None:
+    config = Settings(
+        _env_file=None,
+        environment="production",
+        frontend_origin="https://leases.example",
+        database_url="postgresql+psycopg://user:password@db.example/leases",
+        voyage_api_key="example-voyage-key",
+        gemini_api_key="example-gemini-key",
+        debug_endpoints_enabled=False,
+        ingestion_mode="inline",
+        document_storage_backend="local",
+        auth_mode="disabled",
+    )
+
+    with pytest.raises(RuntimeError, match="Production AUTH_MODE must be cognito"):
+        validate_runtime_settings(config)
 
 
 @pytest.mark.parametrize("timeout", [0, 59, 43_201])

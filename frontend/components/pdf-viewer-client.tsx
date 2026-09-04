@@ -5,6 +5,7 @@ import { Document, Page, pdfjs } from "react-pdf";
 import "react-pdf/dist/Page/TextLayer.css";
 
 import { getDocumentPdfUrl } from "@/lib/api";
+import { getAccessToken } from "@/lib/auth";
 import {
   clearCitationHighlight,
   highlightCitationSnippet,
@@ -34,7 +35,28 @@ export function PdfViewerClient({
   const [pageWidth, setPageWidth] = useState(0);
   const [loadError, setLoadError] = useState(false);
   const [renderedTextPage, setRenderedTextPage] = useState<number | null>(null);
+  const [fileSource, setFileSource] = useState<
+    { documentId: string; url: string; httpHeaders?: Record<string, string> } | null
+  >(null);
   const currentPage = numPages ? Math.min(Math.max(pageNumber, 1), numPages) : pageNumber;
+  // Stale while a new token/documentId is resolving: rendered as "not ready yet"
+  // instead of clearing state synchronously inside the effect below.
+  const readyFileSource = fileSource?.documentId === documentId ? fileSource : null;
+
+  useEffect(() => {
+    let isCurrent = true;
+    void getAccessToken().then((token) => {
+      if (!isCurrent) return;
+      setFileSource({
+        documentId,
+        url: getDocumentPdfUrl(documentId),
+        ...(token ? { httpHeaders: { Authorization: `Bearer ${token}` } } : {}),
+      });
+    });
+    return () => {
+      isCurrent = false;
+    };
+  }, [documentId]);
 
   useEffect(() => {
     const element = viewportRef.current;
@@ -82,9 +104,13 @@ export function PdfViewerClient({
           <div className="grid min-h-[27.5rem] place-items-center rounded-xl border border-[#ebc4bf] bg-[var(--error-bg)] p-6 text-center text-sm leading-6 text-[var(--error)]">
             The lease PDF could not be displayed. You can still review its cited source excerpts.
           </div>
+        ) : !readyFileSource ? (
+          <div className="grid min-h-[27.5rem] place-items-center text-sm text-[var(--muted)]">
+            Loading PDF…
+          </div>
         ) : (
           <Document
-            file={getDocumentPdfUrl(documentId)}
+            file={readyFileSource}
             loading={
               <div className="grid min-h-[27.5rem] place-items-center text-sm text-[var(--muted)]">
                 Loading PDF…

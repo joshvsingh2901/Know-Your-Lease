@@ -10,9 +10,11 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
+from app.api.auth_dependencies import LOCAL_DEV_COGNITO_SUB, LOCAL_DEV_USER_ID
 from app.api.dependencies import get_db
 from app.core.database import Base
 from app.main import app
+from app.models.user import User
 from app.services.document_ingestion import get_ingestion_service
 from app.services.storage import (
     DocumentStorage,
@@ -57,6 +59,8 @@ def session_factory():
 @pytest.fixture()
 def db_session(session_factory) -> Iterator[Session]:
     with session_factory() as session:
+        session.add(User(id=LOCAL_DEV_USER_ID, cognito_sub=LOCAL_DEV_COGNITO_SUB))
+        session.commit()
         yield session
 
 

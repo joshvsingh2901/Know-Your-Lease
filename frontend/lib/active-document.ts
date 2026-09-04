@@ -47,7 +47,11 @@ export async function restoreActiveDocument(
     const status = typeof error === "object" && error !== null
       ? (error as StatusError).status
       : undefined;
-    if (status !== undefined && status >= 400 && status < 500) {
+    // A 404 means this document doesn't exist or isn't owned by the signed-in user --
+    // the stale ID is worthless and should be forgotten. A 401 is about the session,
+    // not this document: the ID may still be valid once the user re-authenticates, so
+    // it must survive an expired/invalid token rather than being silently discarded.
+    if (status !== undefined && status >= 400 && status < 500 && status !== 401) {
       clearActiveDocumentId(storage);
       return null;
     }

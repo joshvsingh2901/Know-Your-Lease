@@ -19,6 +19,7 @@ from sqlalchemy import func, select
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
+from app.api.auth_dependencies import CurrentUser
 from app.api.dependencies import get_db
 from app.api.document_access import AccessibleDocument, AccessibleDocuments
 from app.core.config import settings
@@ -97,6 +98,7 @@ async def upload_document(
     db: Annotated[Session, Depends(get_db)],
     ingestion_service: Annotated[DocumentIngestionService, Depends(get_ingestion_service)],
     ingestion_queue: Annotated[IngestionQueue | None, Depends(get_ingestion_queue)],
+    current_user: CurrentUser,
 ) -> Document:
     filename = Path((file.filename or "").replace("\\", "/")).name
     if not filename:
@@ -133,6 +135,7 @@ async def upload_document(
 
     document = Document(
         id=document_id,
+        owner_id=current_user.id,
         original_filename=filename,
         storage_key=storage_key,
         current_ingestion_version=1,
@@ -367,7 +370,7 @@ def retrieve_document_evidence(
 ) -> RetrievalResponse:
     _require_debug_endpoints()
     try:
-        results = question_service.retrieve(db, document.id, request.question)
+        results = question_service.retrieve(db, document, request.question)
     except QUESTION_SERVICE_EXCEPTIONS as exc:
         raise _question_http_error(exc) from exc
     return RetrievalResponse(
@@ -399,7 +402,7 @@ def ask_document_question(
     ],
 ) -> QuestionResponse:
     try:
-        result = question_service.answer_question(db, document.id, request.question)
+        result = question_service.answer_question(db, document, request.question)
     except QUESTION_SERVICE_EXCEPTIONS as exc:
         raise _question_http_error(exc) from exc
     return QuestionResponse(

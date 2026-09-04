@@ -1,3 +1,4 @@
+import { AuthGate, SignOutButton } from "@/components/auth-gate";
 import { LeaseUpload } from "@/components/lease-upload";
 
 export default function Home() {
@@ -13,7 +14,10 @@ export default function Home() {
               KNOW YOUR LEASE
             </span>
           </a>
-          <span className="hidden text-sm text-[var(--muted)] sm:block">Private document workspace</span>
+          <div className="hidden items-center gap-4 sm:flex">
+            <span className="text-sm text-[var(--muted)]">Private document workspace</span>
+            <SignOutButton />
+          </div>
         </div>
       </header>
 
@@ -30,23 +34,25 @@ export default function Home() {
           </p>
         </div>
 
-        <LeaseUpload />
+        <AuthGate>
+          <LeaseUpload />
 
-        <div className="mx-auto mt-8 grid max-w-3xl gap-3 sm:grid-cols-3">
-          {[
-            ["01", "Upload", "Add your lease as a PDF."],
-            ["02", "Review", "We’ll prepare each clause."],
-            ["03", "Ask", "Get grounded answers with sources."],
-          ].map(([number, title, copy]) => (
-            <div key={number} className="border-t border-[var(--line)] px-1 pt-4">
-              <div className="flex items-baseline gap-3">
-                <span className="font-mono text-xs text-[var(--accent)]">{number}</span>
-                <h2 className="font-semibold text-[var(--navy)]">{title}</h2>
+          <div className="mx-auto mt-8 grid max-w-3xl gap-3 sm:grid-cols-3">
+            {[
+              ["01", "Upload", "Add your lease as a PDF."],
+              ["02", "Review", "We’ll prepare each clause."],
+              ["03", "Ask", "Get grounded answers with sources."],
+            ].map(([number, title, copy]) => (
+              <div key={number} className="border-t border-[var(--line)] px-1 pt-4">
+                <div className="flex items-baseline gap-3">
+                  <span className="font-mono text-xs text-[var(--accent)]">{number}</span>
+                  <h2 className="font-semibold text-[var(--navy)]">{title}</h2>
+                </div>
+                <p className="mt-1 pl-8 text-sm leading-6 text-[var(--muted)]">{copy}</p>
               </div>
-              <p className="mt-1 pl-8 text-sm leading-6 text-[var(--muted)]">{copy}</p>
-            </div>
-          ))}
-        </div>
+            ))}
+          </div>
+        </AuthGate>
       </section>
 
       <footer className="border-t border-[var(--line)]">

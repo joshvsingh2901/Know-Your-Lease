@@ -9,6 +9,7 @@ from sqlalchemy import func, select
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
+from app.api.auth_dependencies import LOCAL_DEV_USER_ID
 from app.api.document_access import (
     get_accessible_document,
     list_accessible_documents,
@@ -282,6 +283,7 @@ def test_get_document_and_paginated_chunks_exclude_embeddings(
 ) -> None:
     document_id = uuid.uuid4()
     document = Document(
+        owner_id=LOCAL_DEV_USER_ID,
         id=document_id,
         original_filename="indexed.pdf",
         status=DocumentStatus.READY,
@@ -320,8 +322,8 @@ def test_document_library_lists_only_safe_document_metadata(
     client: TestClient,
     db_session: Session,
 ) -> None:
-    first = Document(original_filename="first.pdf", storage_key="uploads/private.pdf")
-    second = Document(original_filename="second.pdf", status=DocumentStatus.READY)
+    first = Document(owner_id=LOCAL_DEV_USER_ID, original_filename="first.pdf", storage_key="uploads/private.pdf")
+    second = Document(owner_id=LOCAL_DEV_USER_ID, original_filename="second.pdf", status=DocumentStatus.READY)
     db_session.add_all([first, second])
     db_session.commit()
 
@@ -337,8 +339,8 @@ def test_document_list_uses_central_access_boundary(
     client: TestClient,
     db_session: Session,
 ) -> None:
-    visible = Document(original_filename="visible.pdf", status=DocumentStatus.READY)
-    hidden = Document(original_filename="hidden.pdf", status=DocumentStatus.READY)
+    visible = Document(owner_id=LOCAL_DEV_USER_ID, original_filename="visible.pdf", status=DocumentStatus.READY)
+    hidden = Document(owner_id=LOCAL_DEV_USER_ID, original_filename="hidden.pdf", status=DocumentStatus.READY)
     db_session.add_all([visible, hidden])
     db_session.commit()
     app.dependency_overrides[list_accessible_documents] = lambda: [visible]
@@ -367,7 +369,7 @@ def test_all_document_routes_use_central_access_boundary(
     suffix: str,
     json_body: dict[str, str] | None,
 ) -> None:
-    document = Document(original_filename="private.pdf", status=DocumentStatus.READY)
+    document = Document(owner_id=LOCAL_DEV_USER_ID, original_filename="private.pdf", status=DocumentStatus.READY)
     db_session.add(document)
     db_session.commit()
 
@@ -390,7 +392,7 @@ def test_listing_ready_document_for_reopen_does_not_schedule_ingestion(
     client: TestClient,
     db_session: Session,
 ) -> None:
-    document = Document(original_filename="ready.pdf", status=DocumentStatus.READY)
+    document = Document(owner_id=LOCAL_DEV_USER_ID, original_filename="ready.pdf", status=DocumentStatus.READY)
     db_session.add(document)
     db_session.commit()
     ingestion = app.dependency_overrides[get_ingestion_service]()
@@ -407,7 +409,7 @@ def test_debug_chunks_endpoint_is_hidden_when_disabled(
     db_session: Session,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    document = Document(original_filename="lease.pdf", status=DocumentStatus.READY)
+    document = Document(owner_id=LOCAL_DEV_USER_ID, original_filename="lease.pdf", status=DocumentStatus.READY)
     db_session.add(document)
     db_session.commit()
     monkeypatch.setattr("app.api.routes.documents.settings.debug_endpoints_enabled", False)
@@ -431,6 +433,7 @@ def test_document_pdf_streams_from_document_storage(
 ) -> None:
     document_id = uuid.uuid4()
     document = Document(
+        owner_id=LOCAL_DEV_USER_ID,
         id=document_id,
         original_filename="lease.pdf",
         storage_key=f"uploads/{document_id}.pdf",
@@ -458,6 +461,7 @@ def test_document_pdf_uses_backend_agnostic_storage_interface(
     document_id = uuid.uuid4()
     key = f"uploads/{document_id}.pdf"
     document = Document(
+        owner_id=LOCAL_DEV_USER_ID,
         id=document_id,
         original_filename="lease.pdf",
         storage_key=key,
@@ -483,6 +487,7 @@ def test_document_pdf_provider_failure_returns_safe_temporary_error(
 ) -> None:
     document_id = uuid.uuid4()
     document = Document(
+        owner_id=LOCAL_DEV_USER_ID,
         id=document_id,
         original_filename="lease.pdf",
         storage_key=f"uploads/{document_id}.pdf",
@@ -513,6 +518,7 @@ def test_document_pdf_missing_storage_file_is_safe_and_does_not_leak_path(
     document_id = uuid.uuid4()
     db_session.add(
         Document(
+            owner_id=LOCAL_DEV_USER_ID,
             id=document_id,
             original_filename="lease.pdf",
             storage_key=f"uploads/{document_id}.pdf",

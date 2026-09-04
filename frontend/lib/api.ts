@@ -1,3 +1,4 @@
+import { clearSession, getAccessToken, isAuthConfigured, notifySessionExpired } from "@/lib/auth";
 import type { QuestionAnswer, UploadedDocument } from "@/types/document";
 
 const API_BASE_URL = (process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000").replace(/\/$/, "");
@@ -10,6 +11,21 @@ export class ApiError extends Error {
   constructor(message: string, public readonly status?: number, public readonly code?: string) {
     super(message);
     this.name = "ApiError";
+  }
+}
+
+async function authHeaders(): Promise<HeadersInit> {
+  const token = await getAccessToken();
+  return token ? { Authorization: `Bearer ${token}` } : {};
+}
+
+/** A 401 means the access token Cognito issued is no longer valid: clear the local
+ * session and let the auth gate re-render into its signed-out state. A 403/404 is an
+ * authorization decision about one document, not the session, and must not trigger this. */
+function reactToResponseStatus(response: Response): void {
+  if (response.status === 401 && isAuthConfigured()) {
+    clearSession();
+    notifySessionExpired();
   }
 }
 
@@ -35,11 +51,15 @@ async function getErrorMessage(response: Response, fallback: string): Promise<st
 export async function listDocuments(): Promise<UploadedDocument[]> {
   let response: Response;
   try {
-    response = await fetch(`${API_BASE_URL}/documents`, { cache: "no-store" });
+    response = await fetch(`${API_BASE_URL}/documents`, {
+      cache: "no-store",
+      headers: await authHeaders(),
+    });
   } catch {
     throw new ApiError("Saved documents could not be loaded. Check that the backend is running.");
   }
   if (!response.ok) {
+    reactToResponseStatus(response);
     throw new ApiError(await getErrorMessage(response, "Saved documents could not be loaded."), response.status);
   }
   const body = (await response.json()) as { items: UploadedDocument[] };
@@ -54,6 +74,7 @@ export async function uploadDocument(file: File): Promise<UploadedDocument> {
   try {
     response = await fetch(`${API_BASE_URL}/documents`, {
       method: "POST",
+      headers: await authHeaders(),
       body,
     });
   } catch {
@@ -63,6 +84,7 @@ export async function uploadDocument(file: File): Promise<UploadedDocument> {
   }
 
   if (!response.ok) {
+    reactToResponseStatus(response);
     const message = await getErrorMessage(
       response,
       "Your lease could not be uploaded. Please try again.",
@@ -83,6 +105,7 @@ export async function getDocument(
       method: "GET",
       signal,
       cache: "no-store",
+      headers: await authHeaders(),
     });
   } catch (error) {
     if (error instanceof DOMException && error.name === "AbortError") throw error;
@@ -92,6 +115,7 @@ export async function getDocument(
   }
 
   if (!response.ok) {
+    reactToResponseStatus(response);
     const message = await getErrorMessage(response, "Document status could not be loaded.");
     throw new ApiError(message, response.status);
   }
@@ -108,7 +132,7 @@ export async function askDocumentQuestion(
       `${API_BASE_URL}/documents/${encodeURIComponent(documentId)}/questions`,
       {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", ...(await authHeaders()) },
         body: JSON.stringify({ question }),
       },
     );
@@ -119,6 +143,7 @@ export async function askDocumentQuestion(
   }
 
   if (!response.ok) {
+    reactToResponseStatus(response);
     const message = await getErrorMessage(
       response,
       "Your question could not be answered. Please try again.",

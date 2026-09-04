@@ -31,6 +31,11 @@ class Settings(BaseSettings):
         ge=60,
         le=43_200,
     )
+    auth_mode: Literal["disabled", "cognito"] = "disabled"
+    cognito_region: str | None = None
+    cognito_user_pool_id: str | None = None
+    cognito_app_client_id: str | None = None
+    cognito_issuer: str | None = None
     document_storage_backend: Literal["local", "s3"] = "local"
     pdf_storage_dir: Path = BACKEND_DIR / "storage"
     s3_bucket_name: str | None = None
@@ -94,7 +99,22 @@ class Settings(BaseSettings):
             return value.strip().casefold()
         return value
 
-    @field_validator("s3_bucket_name", "aws_region", "sqs_ingestion_queue_url")
+    @field_validator("auth_mode", mode="before")
+    @classmethod
+    def normalize_auth_mode(cls, value: object) -> object:
+        if isinstance(value, str):
+            return value.strip().casefold()
+        return value
+
+    @field_validator(
+        "s3_bucket_name",
+        "aws_region",
+        "sqs_ingestion_queue_url",
+        "cognito_region",
+        "cognito_user_pool_id",
+        "cognito_app_client_id",
+        "cognito_issuer",
+    )
     @classmethod
     def normalize_optional_storage_setting(cls, value: str | None) -> str | None:
         if value is None:
@@ -118,6 +138,26 @@ class Settings(BaseSettings):
                 if origin.strip()
             )
         return list(dict.fromkeys(origins))
+
+    @computed_field
+    @property
+    def cognito_issuer_url(self) -> str | None:
+        if self.cognito_issuer:
+            return self.cognito_issuer
+        if self.cognito_region and self.cognito_user_pool_id:
+            return (
+                f"https://cognito-idp.{self.cognito_region}.amazonaws.com/"
+                f"{self.cognito_user_pool_id}"
+            )
+        return None
+
+    @computed_field
+    @property
+    def cognito_jwks_url(self) -> str | None:
+        issuer = self.cognito_issuer_url
+        if not issuer:
+            return None
+        return f"{issuer}/.well-known/jwks.json"
 
     @computed_field
     @property
@@ -185,11 +225,25 @@ def validate_runtime_settings(config: Settings) -> None:
             "SQS ingestion requires SQS_INGESTION_QUEUE_URL and AWS_REGION to be set."
         )
 
+    if config.auth_mode == "cognito" and (
+        not config.cognito_region
+        or not config.cognito_user_pool_id
+        or not config.cognito_app_client_id
+    ):
+        problems.append(
+            "Cognito authentication requires COGNITO_REGION, COGNITO_USER_POOL_ID, "
+            "and COGNITO_APP_CLIENT_ID to be set."
+        )
+
     if config.environment == "production":
         if "document_storage_backend" not in config.model_fields_set:
             problems.append("Production DOCUMENT_STORAGE_BACKEND must be set explicitly.")
         if "ingestion_mode" not in config.model_fields_set:
             problems.append("Production INGESTION_MODE must be set explicitly.")
+        if "auth_mode" not in config.model_fields_set:
+            problems.append("Production AUTH_MODE must be set explicitly.")
+        if config.auth_mode != "cognito":
+            problems.append("Production AUTH_MODE must be cognito.")
         primary_origin = origins[0] if origins else ""
         parsed_origin = urlsplit(primary_origin) if primary_origin else None
         hostname = parsed_origin.hostname if parsed_origin else None

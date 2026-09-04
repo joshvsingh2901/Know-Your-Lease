@@ -1,6 +1,6 @@
 # Deployment Runbook: Railway + Vercel
 
-This runbook prepares the existing single-user application for one Railway API instance, Railway PostgreSQL with pgvector, a Railway persistent PDF volume, and a Vercel frontend. It does not add authentication; use only non-sensitive demonstration documents until authenticated ownership exists.
+This runbook prepares the application for one Railway API instance, Railway PostgreSQL with pgvector, a Railway persistent PDF volume, and a Vercel frontend. The application enforces Cognito authentication and per-document ownership in code (`docs/authentication.md`), but this runbook does not provision a live Cognito user pool. Deploying with real per-user isolation additionally requires provisioning that pool and setting `AUTH_MODE=cognito` plus the resulting `COGNITO_*`/`NEXT_PUBLIC_COGNITO_*` values; without it, production startup validation refuses to start.
 
 ## Target topology
 
@@ -60,6 +60,10 @@ DATABASE_URL=${{Postgres.DATABASE_URL}}
 FRONTEND_ORIGIN=https://<your-vercel-production-domain>
 INGESTION_MODE=inline
 DOCUMENT_STORAGE_BACKEND=local
+AUTH_MODE=cognito
+COGNITO_REGION=<your-pool-region>
+COGNITO_USER_POOL_ID=<your-pool-id>
+COGNITO_APP_CLIENT_ID=<your-app-client-id>
 VOYAGE_API_KEY=<secret>
 VOYAGE_EMBEDDING_MODEL=voyage-law-2
 GEMINI_API_KEY=<secret>
@@ -69,7 +73,7 @@ DEBUG_ENDPOINTS_ENABLED=false
 ANSWER_CACHE_VERSION=v1
 ```
 
-`FRONTEND_ORIGIN` must be the exact HTTPS origin with no path or trailing wildcard. Do not set `ADDITIONAL_FRONTEND_ORIGINS` in production. `PORT` and Railway volume variables are platform-provided.
+`FRONTEND_ORIGIN` must be the exact HTTPS origin with no path or trailing wildcard. Do not set `ADDITIONAL_FRONTEND_ORIGINS` in production. `PORT` and Railway volume variables are platform-provided. `AUTH_MODE=cognito` requires an already-provisioned Cognito user pool and app client -- this runbook does not create one; production startup validation refuses to start with `AUTH_MODE` unset or `disabled`.
 
 Optional settings can retain their code defaults, including the 20 MB upload limit, Voyage pacing, Gemini output/retry limits, and chunk parameters.
 
@@ -102,13 +106,16 @@ Import the same GitHub repository as a Vercel project:
 | Output Directory | Default Next.js output |
 | Node.js version | `24.x` |
 
-Set this Production environment variable before the final build:
+Set these Production environment variables before the final build:
 
 ```dotenv
 NEXT_PUBLIC_API_BASE_URL=https://<your-railway-backend-domain>
+NEXT_PUBLIC_COGNITO_DOMAIN=https://<your-pool-domain>.auth.<region>.amazoncognito.com
+NEXT_PUBLIC_COGNITO_APP_CLIENT_ID=<your-app-client-id>
+NEXT_PUBLIC_COGNITO_REDIRECT_URI=https://<your-vercel-production-domain>/auth/callback
 ```
 
-Do not include a trailing slash. `NEXT_PUBLIC_` values are embedded into the browser bundle at build time, so redeploy Vercel whenever this URL changes. Preview deployment domains are intentionally not accepted by the production API unless a separate preview backend is configured with that exact origin.
+Do not include a trailing slash on `NEXT_PUBLIC_API_BASE_URL`. `NEXT_PUBLIC_` values are embedded into the browser bundle at build time, so redeploy Vercel whenever any of them change. All are public by design; the Cognito app client must be configured with no client secret. Preview deployment domains are intentionally not accepted by the production API unless a separate preview backend is configured with that exact origin. Leaving the three `NEXT_PUBLIC_COGNITO_*` variables unset keeps the frontend in its local/no-sign-in mode, which will not match a backend running `AUTH_MODE=cognito`.
 
 ## CORS wiring
 

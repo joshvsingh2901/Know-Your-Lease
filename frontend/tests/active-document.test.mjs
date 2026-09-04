@@ -87,6 +87,31 @@ test("a failed document clears saved state during restore", async () => {
   assert.equal(readActiveDocumentId(storage), null);
 });
 
+test("an expired session (401) does not clear the saved document ID", async () => {
+  const storage = createStorage({ [ACTIVE_DOCUMENT_STORAGE_KEY]: "my-document" });
+
+  await assert.rejects(
+    () =>
+      restoreActiveDocument(storage, async () => {
+        throw { status: 401 };
+      }),
+    (error) => error.status === 401,
+  );
+
+  assert.equal(readActiveDocumentId(storage), "my-document");
+});
+
+test("another user's document (404) still clears saved state", async () => {
+  const storage = createStorage({ [ACTIVE_DOCUMENT_STORAGE_KEY]: "someone-elses-document" });
+
+  const restored = await restoreActiveDocument(storage, async () => {
+    throw { status: 404 };
+  });
+
+  assert.equal(restored, null);
+  assert.equal(readActiveDocumentId(storage), null);
+});
+
 test("upload another lease clears saved state", () => {
   const storage = createStorage();
   saveActiveDocumentId(storage, "active-document");

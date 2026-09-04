@@ -5,6 +5,7 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
+from app.api.auth_dependencies import LOCAL_DEV_USER_ID
 from app.main import app
 from app.models.answer_cache import GroundedAnswerCache
 from app.models.document import Document, DocumentStatus
@@ -77,6 +78,7 @@ class FakeGenerationService:
 def _document(db: Session, status: DocumentStatus) -> Document:
     document = Document(
         id=uuid.uuid4(),
+        owner_id=LOCAL_DEV_USER_ID,
         original_filename="lease.pdf",
         status=status,
     )

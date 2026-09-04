@@ -10,6 +10,7 @@ Know Your Lease turns a digital lease into a reusable question-answering workspa
 
 ## Technical Highlights
 
+- Cognito-backed authentication with per-document ownership enforced at a single access boundary
 - Legal-domain embeddings with Voyage AI `voyage-law-2` and PostgreSQL/pgvector
 - Page-aware extraction, chunking, retrieval, and citation provenance
 - Structured, evidence-bound generation with Gemini
@@ -65,6 +66,10 @@ flowchart LR
     VERIFY --> CACHE[(Verified-answer cache)]
 ```
 
+### Authentication and ownership
+
+Every document-scoped route requires an authenticated user: a verified Cognito access token (`AUTH_MODE=cognito`) or a fixed local-development user (`AUTH_MODE=disabled`, the local/test default). A single access boundary (`document_access.py`) resolves a document only when it is owned by the current user; unowned or another user's document returns 404, never 403, so a document UUID cannot be used to probe for someone else's lease. See [docs/authentication.md](docs/authentication.md) for the full design — this repository implements the flow in code but does not provision a live Cognito user pool.
+
 ### Ingestion
 
 PDFs are validated before storage. In SQS mode, the API commits a `queued` document and publishes only its UUID and ingestion version; the standalone worker then reuses the existing ingestion service. Document-level version/attempt checks make duplicate and stale delivery safe. Text is normalized without paraphrasing and split into page-aware chunks. Voyage document embeddings use asymmetric document mode and are persisted as 1,024-dimensional vectors. Chunk replacement, cache invalidation, and the `ready` transition commit atomically after all embeddings succeed.
@@ -83,6 +88,7 @@ Gemini never supplies trusted page numbers. The backend maps returned source IDs
 | --- | --- |
 | Frontend | Next.js 16, React 19, TypeScript, Tailwind CSS, React-PDF |
 | Backend | FastAPI, Pydantic, SQLAlchemy, Alembic |
+| Authentication | Amazon Cognito (Hosted UI, PKCE), PyJWT JWKS verification |
 | PDF processing | PyMuPDF, page-preserving normalization, local chunker |
 | Embeddings | Voyage AI `voyage-law-2` |
 | Retrieval | PostgreSQL, pgvector, exact cosine search |
@@ -100,23 +106,25 @@ The project intentionally avoids LangChain, LlamaIndex, a second vector database
 - Unknown model source IDs reject the response; page and chunk metadata remain backend-owned.
 - PDFs use generated UUID storage keys in local or private S3 storage; APIs expose neither paths nor bucket details.
 - Provider/database secrets use masked configuration, and local `.env` files are ignored.
-- Production configuration rejects wildcard CORS, non-HTTPS frontend origins, enabled debug routes, missing provider keys, unsafe local paths, and incomplete S3 settings.
-- Every document route passes through a centralized access-policy seam for future ownership enforcement.
+- Production configuration rejects wildcard CORS, non-HTTPS frontend origins, enabled debug routes, missing provider keys, unsafe local paths, incomplete S3 settings, and a missing/disabled `AUTH_MODE`.
+- Every document route passes through one centralized access seam that enforces per-user document ownership; unowned/another user's document returns 404, never 403.
 
-This is currently a single-user application. Browser `localStorage` remembers an active document UUID for convenience, not authorization; sensitive multi-user deployment requires authenticated document ownership.
+Every document belongs to exactly one authenticated user. Browser `localStorage` remembers an active document UUID for convenience only, never as authorization — the backend re-checks ownership on every request. This repository implements Cognito verification and ownership enforcement in code but does not provision or run a live Cognito user pool; see [docs/authentication.md](docs/authentication.md).
 
 ## Repository Structure
 
 ```text
-frontend/                       Next.js upload, Q&A, citations, and PDF viewer
-backend/app/api/                FastAPI routes and document access boundary
+frontend/                       Next.js upload, Q&A, citations, auth, and PDF viewer
+backend/app/api/                FastAPI routes, auth dependencies, and document access boundary
+backend/app/core/auth.py        Cognito JWT/JWKS verification
 backend/app/services/           Storage, ingestion, retrieval, generation, and cache
 backend/app/workers/            Standalone SQS ingestion worker
-backend/app/models/             Documents, chunks, and grounded-answer cache
+backend/app/models/             Users, documents (owner-scoped), chunks, and grounded-answer cache
 backend/alembic/                Additive PostgreSQL migrations
+backend/scripts/                Retrieval evaluation and local-development backfill tooling
 backend/evaluation/             Retrieval labels and evaluation tooling
 backend/tests/                  Offline provider-mocked regression suite
-docs/                           Architecture, decisions, evaluation, and deployment
+docs/                           Architecture, decisions, evaluation, deployment, and auth
 railway.toml                    Railway build, migration, startup, and health config
 backend/Dockerfile              Production-oriented API/migration runtime image
 ```
@@ -158,6 +166,16 @@ npm run dev
 Open `http://localhost:3000`. Local PDFs default to `backend/storage/uploads/`; set `PDF_STORAGE_DIR` to override the storage root.
 S3 and SQS are optional and never required for inline local development. See [document storage](docs/document-storage.md) and the [ingestion worker](docs/ingestion-worker.md) for backend selection, queue behavior, worker startup, and IAM boundaries.
 
+Local development needs no Cognito setup: `AUTH_MODE` defaults to `disabled`, which resolves every request to one fixed local user with no sign-in screen. Existing documents created before Phase 4 have no owner and are invisible to that user until backfilled once:
+
+```bash
+cd backend
+source .venv/bin/activate
+python scripts/backfill_document_owners.py
+```
+
+See [docs/authentication.md](docs/authentication.md) for the full Cognito flow, JWT verification, and what production requires.
+
 ### Containerized backend
 
 The production-oriented backend image runs Uvicorn as a non-root user, reads all configuration at runtime, includes Alembic migrations, and keeps application startup separate from schema migration:
@@ -174,16 +192,16 @@ This Compose path is optional; the native reload workflow above remains unchange
 
 ## API Surface
 
-- `GET /health` — service health
-- `POST /documents` — validate and persist a PDF, then schedule inline or enqueue SQS ingestion
-- `GET /documents` — list safe document metadata
-- `GET /documents/{id}` — get processing status and metadata
-- `GET /documents/{id}/pdf` — stream the original PDF
-- `POST /documents/{id}/questions` — return a grounded answer and verified citations
-- `GET /documents/{id}/chunks` — development-only chunk inspection
-- `POST /documents/{id}/retrieve` — development-only retrieval diagnostics
+- `GET /health` — service health; the only route that requires no `Authorization` header
+- `POST /documents` — validate and persist a PDF under the authenticated user, then schedule inline or enqueue SQS ingestion
+- `GET /documents` — list the authenticated user's own document metadata
+- `GET /documents/{id}` — get processing status and metadata for an owned document
+- `GET /documents/{id}/pdf` — stream the original PDF for an owned document
+- `POST /documents/{id}/questions` — return a grounded answer and verified citations for an owned document
+- `GET /documents/{id}/chunks` — development-only chunk inspection (owned document + debug enabled)
+- `POST /documents/{id}/retrieve` — development-only retrieval diagnostics (owned document + debug enabled)
 
-Debug endpoints return 404 when disabled and cannot be enabled in production configuration.
+All routes other than `/health` require `Authorization: Bearer <token>` when `AUTH_MODE=cognito` (local development's `AUTH_MODE=disabled` needs none). A document that does not exist and one owned by another user both return 404, never 403. Debug endpoints return 404 when disabled and cannot be enabled in production configuration.
 
 ## Deployment
 
@@ -220,7 +238,8 @@ Automated tests mock Voyage and Gemini; they do not make provider calls or re-in
 
 ## Current Limitations
 
-- No authentication or user/document ownership enforcement
+- Cognito authentication and per-document ownership are implemented in code, but this repository does not provision or run a live Cognito user pool
+- Access tokens are stored in browser `localStorage`, which is readable by a successful XSS; a backend-for-frontend with httpOnly cookies would remove that exposure but is out of this phase's scope
 - SQS remains at-least-once: application processing is idempotent, but AWS queue/DLQ provisioning, automated replay, visibility heartbeats, and cross-process provider rate coordination remain operational work
 - No re-ingestion endpoint or version-bump producer: every document is created at ingestion version 1, and the version/attempt machinery that guards duplicate/stale delivery has no caller that requests a later version yet
 - Single-process provider rate coordination
@@ -230,4 +249,4 @@ Automated tests mock Voyage and Gemini; they do not make provider calls or re-in
 - No chat history or follow-up question rewriting
 - Best-effort text-layer highlighting rather than coordinate-level highlights
 
-Further detail: [architecture](docs/architecture.md), [document storage](docs/document-storage.md), [RAG decisions](docs/rag-decisions.md), [retrieval evaluation](docs/retrieval-evaluation.md), and [production hardening](docs/production-hardening.md).
+Further detail: [architecture](docs/architecture.md), [authentication](docs/authentication.md), [document storage](docs/document-storage.md), [RAG decisions](docs/rag-decisions.md), [retrieval evaluation](docs/retrieval-evaluation.md), and [production hardening](docs/production-hardening.md).

@@ -75,21 +75,18 @@ class QuestionAnsweringService:
         self.final_k = final_k
 
     @staticmethod
-    def _require_ready_document(db: Session, document_id: uuid.UUID) -> Document:
-        document = db.get(Document, document_id)
-        if document is None:
-            raise DocumentNotFoundError("Document not found.")
+    def _require_ready(document: Document) -> None:
         if document.status != DocumentStatus.READY:
             raise DocumentNotReadyError(document.status)
-        return document
 
     def retrieve(
         self,
         db: Session,
-        document_id: uuid.UUID,
+        document: Document,
         question: str,
     ) -> list[RetrievalResult]:
-        self._require_ready_document(db, document_id)
+        self._require_ready(document)
+        document_id = document.id
         started = time.perf_counter()
         query_embedding = self.embedding_service.embed_query(question)
         results = self.retrieval_service.search(
@@ -113,11 +110,12 @@ class QuestionAnsweringService:
     def answer_question(
         self,
         db: Session,
-        document_id: uuid.UUID,
+        document: Document,
         question: str,
     ) -> QuestionAnswer:
         total_started = time.perf_counter()
-        self._require_ready_document(db, document_id)
+        self._require_ready(document)
+        document_id = document.id
         cached = self.answer_cache.get(db, document_id, question)
         if cached is not None:
             logger.info("Reused grounded answer cache for document %s", document_id)
@@ -135,7 +133,7 @@ class QuestionAnsweringService:
                 ],
             )
 
-        results = self.retrieve(db, document_id, question)
+        results = self.retrieve(db, document, question)
         if not results:
             raise NoRetrievedEvidenceError(
                 "No indexed lease evidence was available for this question."
