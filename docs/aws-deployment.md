@@ -1,8 +1,9 @@
 # AWS Deployment Preparation
 
-Phase 6 targets an AWS production runtime, but Phase 6A only prepares repository
-configuration. No AWS or Vercel resources have been provisioned, no image has been
-pushed to ECR, and no deployment has occurred.
+Phase 6 targets an AWS production runtime. Phase 6A prepared repository
+configuration, and Phase 6B provisioned the network/data-plane foundation recorded
+in [the resource inventory](aws-resource-inventory.md). No image has been pushed to
+ECR and no application or Vercel deployment has occurred.
 
 ## Approved target
 
@@ -173,6 +174,16 @@ task execution roles.
 
 ## Phase boundary
 
-Phase 6A does not create the VPC, subnets, ALB, ECS cluster, ECR repository, RDS
-instance, S3 bucket, SQS/DLQ, Cognito pool, IAM roles, Secrets Manager entries, or
-Vercel deployment. Those actions remain pending; Phase 6B has not started.
+Phase 6B created the VPC, four subnets, Internet Gateway, route tables, security
+groups, S3 Gateway endpoint, private RDS instance and RDS-managed master secret,
+private S3 bucket, and SQS/DLQ. It did not create an ALB, ECS cluster/service, ECR
+repository, Cognito pool, application IAM role, application secret, DNS resource,
+or Vercel deployment. Phase 6C has not started.
+
+## Phase 6B live-account deviation
+
+The selected AWS Free plan rejected seven-day RDS automated-backup retention
+before creating an instance. The temporary portfolio instance uses one-day
+retention instead. Deletion protection remains enabled, and teardown requires an
+explicit final-snapshot decision. No other approved RDS sizing or security setting
+is changed by this account constraint.

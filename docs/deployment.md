@@ -1,8 +1,9 @@
 # Deployment Overview
 
 The repository is prepared for an AWS production deployment but is not currently
-deployed. Phase 6A introduces workload-specific configuration only; infrastructure
-provisioning and application deployment remain pending.
+serving the application. Phase 6A introduced workload-specific configuration, and
+Phase 6B provisioned the temporary network/data plane. Compute, public ingress,
+identity, application IAM/secrets, and frontend deployment remain pending.
 
 ## Current production target
 
@@ -60,7 +61,9 @@ S3 and SQS. It must not be treated as the current production runbook.
 
 ## Current status
 
-No VPC, subnet, ALB, ECS cluster or service, ECR repository, RDS database, S3
-bucket, SQS queue or DLQ, Cognito pool, IAM role, Secrets Manager secret, DNS
-record, or Vercel deployment has been created. Manual deployment begins only in a
-later Phase 6 sub-phase.
+The VPC, subnets, routing, scoped security groups, S3 Gateway endpoint, private RDS
+PostgreSQL instance, private S3 bucket, and encrypted SQS/DLQ now exist in
+`ca-central-1`. Exact identifiers, verification, costs, and teardown commands are
+in [the resource inventory](aws-resource-inventory.md). No ALB, ECS cluster or
+service, ECR repository, Cognito pool, application IAM role/secret, DNS record, or
+Vercel deployment has been created.

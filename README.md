@@ -205,9 +205,9 @@ All routes other than `/health` require `Authorization: Bearer <token>` when `AU
 
 ## Deployment
 
-Phase 6A prepares, but does not provision, the approved production target: a Vercel frontend, Cognito PKCE login, an HTTPS ALB, separate ECS/Fargate API and worker services, a one-off migration task, RDS PostgreSQL with pgvector, private S3 storage, SQS with a DLQ, ECR, IAM task roles, and Secrets Manager in `ca-central-1`.
+Phase 6A prepared workload-specific configuration for the approved production target. Phase 6B has provisioned the tagged `ca-central-1` network and data plane: a two-AZ VPC, public task/ALB subnets, isolated database subnets, scoped security groups, a free S3 Gateway endpoint, private RDS PostgreSQL 18.6, a private S3 bucket, and encrypted SQS/DLQ queues.
 
-The API, worker, and migration task use the same Docker image with workload-specific validation and least-secret configuration. See the [deployment overview](docs/deployment.md) and [AWS deployment preparation](docs/aws-deployment.md) for the exact configuration map. No AWS resources or hosted deployment currently exist; Phase 6B provisioning remains pending.
+The API, worker, and migration task use the same Docker image with workload-specific validation and least-secret configuration. See the [deployment overview](docs/deployment.md), [AWS deployment preparation](docs/aws-deployment.md), and [live resource inventory](docs/aws-resource-inventory.md). ECS, ALB, ECR, Cognito, application IAM/secrets, and Vercel remain unprovisioned, so there is no hosted application yet.
 
 ## Testing
 
@@ -249,10 +249,10 @@ for the job design, migration policy, local commands, and branch-protection step
 
 - Cognito authentication and per-document ownership are implemented in code, but this repository does not provision or run a live Cognito user pool
 - Access tokens are stored in browser `localStorage`, which is readable by a successful XSS; a backend-for-frontend with httpOnly cookies would remove that exposure but is out of this phase's scope
-- SQS remains at-least-once: application processing is idempotent, but AWS queue/DLQ provisioning, automated replay, visibility heartbeats, and cross-process provider rate coordination remain operational work
+- SQS remains at-least-once: the queue and DLQ are provisioned, but automated replay, visibility heartbeats, and cross-process provider rate coordination remain operational work
 - No re-ingestion endpoint or version-bump producer: every document is created at ingestion version 1, and the version/attempt machinery that guards duplicate/stale delivery has no caller that requests a later version yet
 - Single-process provider rate coordination
-- No provisioned S3 bucket, lifecycle/retention policy, backup policy, or AWS deployment infrastructure
+- The Phase 6B network/data plane exists temporarily, but ECS, ALB, ECR, Cognito, application IAM/secrets, and application deployment remain pending; RDS backup retention is limited to one day by the account's Free plan
 - No OCR, malware scanning, or encrypted retention workflow
 - No calibrated retrieval threshold, reranker, or hybrid lexical retrieval
 - No chat history or follow-up question rewriting
