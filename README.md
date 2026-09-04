@@ -228,6 +228,7 @@ ruff check .
 cd ../frontend
 npm run lint
 npm run typecheck
+npm test
 npm run build
 
 cd ..
@@ -235,6 +236,22 @@ git diff --check
 ```
 
 Automated tests mock Voyage and Gemini; they do not make provider calls or re-index a lease.
+
+## Continuous Integration
+
+GitHub Actions runs one four-job CI workflow for pull requests targeting `main`,
+pushes to `main`, and manual runs. The stable checks are `Backend`, `Frontend`,
+`Database/Migrations`, and `Docker Build`. They validate dependency integrity,
+Ruff, pytest, frontend lint/type/tests/build, the single-head Alembic graph and a
+clean upgrade on PostgreSQL 18 with pgvector, and a cached `linux/amd64` build of
+the production backend/worker image.
+
+CI uses only deterministic local values and existing mocks; it needs no AWS,
+Cognito, Voyage, Gemini, or production database secrets. The Docker image is
+built but never pushed. Configure the four check names above as required checks
+in the `main` branch ruleset after the workflow has run once. This is CI only;
+continuous delivery is not implemented. See [continuous integration](docs/continuous-integration.md)
+for the job design, migration policy, local commands, and branch-protection steps.
 
 ## Current Limitations
 
