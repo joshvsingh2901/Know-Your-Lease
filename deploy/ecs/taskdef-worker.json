@@ -1,0 +1,46 @@
+{
+  "family": "know-your-lease-worker",
+  "networkMode": "awsvpc",
+  "requiresCompatibilities": ["FARGATE"],
+  "cpu": "256",
+  "memory": "1024",
+  "runtimePlatform": { "cpuArchitecture": "X86_64", "operatingSystemFamily": "LINUX" },
+  "executionRoleArn": "arn:aws:iam::297784246437:role/kyl-worker-execution",
+  "taskRoleArn": "arn:aws:iam::297784246437:role/kyl-worker-task",
+  "containerDefinitions": [
+    {
+      "name": "worker",
+      "image": "297784246437.dkr.ecr.ca-central-1.amazonaws.com/know-your-lease-backend@sha256:da415a7320f1324d98dfe1bf0934fbc2749f53f1f8c69f0f0da024dc2835a248",
+      "essential": true,
+      "command": ["python", "-m", "app.workers.ingestion"],
+      "environment": [
+        { "name": "ENVIRONMENT", "value": "production" },
+        { "name": "DOCUMENT_STORAGE_BACKEND", "value": "s3" },
+        { "name": "S3_BUCKET_NAME", "value": "know-your-lease-prod-297784246437-ca-central-1" },
+        { "name": "AWS_REGION", "value": "ca-central-1" },
+        { "name": "INGESTION_MODE", "value": "sqs" },
+        { "name": "SQS_INGESTION_QUEUE_URL", "value": "https://sqs.ca-central-1.amazonaws.com/297784246437/know-your-lease-ingestion-prod" },
+        { "name": "INGESTION_PROCESSING_TIMEOUT_SECONDS", "value": "900" }
+      ],
+      "secrets": [
+        { "name": "DATABASE_URL", "valueFrom": "arn:aws:secretsmanager:ca-central-1:297784246437:secret:know-your-lease/prod/database-url-app-FsTQ8V" },
+        { "name": "VOYAGE_API_KEY", "valueFrom": "arn:aws:secretsmanager:ca-central-1:297784246437:secret:know-your-lease/prod/voyage-api-key-sA4kXX" }
+      ],
+      "healthCheck": {
+        "command": ["CMD-SHELL", "python -m app.workers.ingestion --check"],
+        "interval": 60,
+        "timeout": 10,
+        "retries": 3,
+        "startPeriod": 30
+      },
+      "logConfiguration": {
+        "logDriver": "awslogs",
+        "options": {
+          "awslogs-group": "/ecs/know-your-lease/worker",
+          "awslogs-region": "ca-central-1",
+          "awslogs-stream-prefix": "worker"
+        }
+      }
+    }
+  ]
+}

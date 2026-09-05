@@ -108,8 +108,10 @@ guardrail (see below). That one call mutated nothing.
 
 ### `KnowYourLeaseDeployerPolicy`: what it allows and explicitly denies
 
-Full policy: `aws iam get-policy-version --policy-arn arn:aws:iam::297784246437:policy/KnowYourLeaseDeployerPolicy --version-id v1`.
-Summary:
+Full policy: `aws iam get-policy-version --policy-arn arn:aws:iam::297784246437:policy/KnowYourLeaseDeployerPolicy --version-id v2`
+(current default; `v1` is the Phase 6C version, retained for history). Summary
+below covers `v1`'s statements first; the **Phase 6D additions** subsection
+covers what `v2` added on top.
 
 **Allowed**, scoped to this project's resources or to safe read-only actions:
 - Read-only account/cost checks: `sts:GetCallerIdentity`, `freetier:Get*`,
@@ -156,6 +158,62 @@ Summary:
   block a human (or root) from fixing `kyl-deployer` through the console; it
   blocks `kyl-deployer` from doing these things to itself, accidentally or
   otherwise.
+
+### Phase 6D additions (`v2`)
+
+All 15 `v1` statements above, including all 5 Deny statements, carry forward
+into `v2` byte-for-byte -- verified programmatically before publishing by
+comparing each preserved statement's JSON, not just eyeballing a diff.
+Added on top, all newly **allowed**:
+
+- ECR image-push actions (`InitiateLayerUpload`, `UploadLayerPart`,
+  `CompleteLayerUpload`, `PutImage`, `BatchCheckLayerAvailability`,
+  `BatchGetImage`, `GetDownloadUrlForLayer`), scoped to the
+  `know-your-lease-backend` repository ARN.
+- `ecs:CreateCluster`/`DeleteCluster`/`RegisterTaskDefinition`/
+  `DeregisterTaskDefinition`/`TagResource` on `Resource: "*"` -- AWS does not
+  support resource-level permissions for cluster creation or task-definition
+  registration (the ARN doesn't exist until the call succeeds), so these
+  cannot be scoped further.
+- `ecs:RunTask`/`StopTask`/`CreateService`/`UpdateService`/`DeleteService`,
+  scoped to `know-your-lease-*` task-definition/service/task ARNs **and**
+  gated by an `ecs:cluster` condition matching only
+  `know-your-lease-prod` -- unlike the actions above, these do support
+  resource-level scoping, so they get it.
+- CloudWatch Logs group management (`CreateLogGroup`, `PutRetentionPolicy`,
+  `DeleteLogGroup`, `GetLogEvents`, `FilterLogEvents`), scoped to
+  `/ecs/know-your-lease/*`. `logs:TagResource` was cut for policy-size reasons
+  (see `docs/aws-deployment.md`'s Phase 6D deviations); log groups in this
+  phase were created without inline tags as a direct consequence.
+- ELBv2 management (create/delete load balancer, target group, listener;
+  register/deregister targets; modify attributes; security groups; tags) plus
+  `Describe*`, on `Resource: "*"` -- load-balancer and target-group ARNs don't
+  exist before creation, and `Describe*` calls are inherently account-wide.
+- `iam:CreateServiceLinkedRole`, gated by an `iam:AWSServiceName` condition
+  matching only `ecs.amazonaws.com` and `elasticloadbalancing.amazonaws.com` --
+  a condition-based restriction rather than a resource-based one, since the
+  service-linked role's exact name is chosen by AWS, not the caller.
+
+No `s3:*`, `sqs:*`, `secretsmanager:*`, `ec2:CreateNetworkInterface`, or
+`AdministratorAccess` was added. The deployer still cannot read any secret
+*value* (`secretsmanager:GetSecretValue` remains ungranted) and still cannot
+create a new IAM user, access key, or login profile.
+
+### The temporary bootstrap identities (created and deleted within Phase 6D)
+
+`kyl-bootstrap-execution` and `kyl-bootstrap-task` existed only for the
+duration of the one-off database-role bootstrap task and were deleted
+immediately after it succeeded -- they are not part of the standing identity
+set above and do not appear in `KnowYourLeaseDeployerPolicy` at all (they were
+their own separate roles). The execution role carried only the AWS-managed
+ECS execution baseline (no Secrets Manager access -- the master secret's ARN
+travelled as plain task configuration, not as an ECS `secrets` injection, so
+the *execution* role never needed to touch it). The task role could read only
+the RDS-managed master secret and create/update only
+`know-your-lease/prod/database-url-*`. After deletion,
+`simulate-principal-policy` was re-run against all five long-lived project
+roles to confirm none of them can read the RDS master secret -- this is the
+proof that the bootstrap privilege did not quietly become permanent.
 
 ## Root: break-glass only
 

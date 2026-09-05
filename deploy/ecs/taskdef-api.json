@@ -1,0 +1,48 @@
+{
+  "family": "know-your-lease-api",
+  "networkMode": "awsvpc",
+  "requiresCompatibilities": ["FARGATE"],
+  "cpu": "256",
+  "memory": "1024",
+  "runtimePlatform": { "cpuArchitecture": "X86_64", "operatingSystemFamily": "LINUX" },
+  "executionRoleArn": "arn:aws:iam::297784246437:role/kyl-api-execution",
+  "taskRoleArn": "arn:aws:iam::297784246437:role/kyl-api-task",
+  "containerDefinitions": [
+    {
+      "name": "api",
+      "image": "297784246437.dkr.ecr.ca-central-1.amazonaws.com/know-your-lease-backend@sha256:da415a7320f1324d98dfe1bf0934fbc2749f53f1f8c69f0f0da024dc2835a248",
+      "essential": true,
+      "portMappings": [{ "containerPort": 8000, "protocol": "tcp" }],
+      "environment": [
+        { "name": "ENVIRONMENT", "value": "production" },
+        { "name": "PORT", "value": "8000" },
+        { "name": "DOCUMENT_STORAGE_BACKEND", "value": "s3" },
+        { "name": "S3_BUCKET_NAME", "value": "know-your-lease-prod-297784246437-ca-central-1" },
+        { "name": "AWS_REGION", "value": "ca-central-1" },
+        { "name": "INGESTION_MODE", "value": "sqs" },
+        { "name": "SQS_INGESTION_QUEUE_URL", "value": "https://sqs.ca-central-1.amazonaws.com/297784246437/know-your-lease-ingestion-prod" },
+        { "name": "INGESTION_PROCESSING_TIMEOUT_SECONDS", "value": "900" },
+        { "name": "AUTH_MODE", "value": "cognito" },
+        { "name": "COGNITO_REGION", "value": "ca-central-1" },
+        { "name": "COGNITO_USER_POOL_ID", "value": "ca-central-1_Lhw9u8Yh6" },
+        { "name": "COGNITO_APP_CLIENT_ID", "value": "4sq1r3l1flfv1acrkrqc69aoh9" },
+        { "name": "FRONTEND_ORIGIN", "value": "https://know-your-lease.invalid" },
+        { "name": "DEBUG_ENDPOINTS_ENABLED", "value": "false" },
+        { "name": "ANSWER_CACHE_VERSION", "value": "v1" }
+      ],
+      "secrets": [
+        { "name": "DATABASE_URL", "valueFrom": "arn:aws:secretsmanager:ca-central-1:297784246437:secret:know-your-lease/prod/database-url-app-FsTQ8V" },
+        { "name": "VOYAGE_API_KEY", "valueFrom": "arn:aws:secretsmanager:ca-central-1:297784246437:secret:know-your-lease/prod/voyage-api-key-sA4kXX" },
+        { "name": "GEMINI_API_KEY", "valueFrom": "arn:aws:secretsmanager:ca-central-1:297784246437:secret:know-your-lease/prod/gemini-api-key-8gTg9j" }
+      ],
+      "logConfiguration": {
+        "logDriver": "awslogs",
+        "options": {
+          "awslogs-group": "/ecs/know-your-lease/api",
+          "awslogs-region": "ca-central-1",
+          "awslogs-stream-prefix": "api"
+        }
+      }
+    }
+  ]
+}

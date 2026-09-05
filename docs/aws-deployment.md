@@ -200,10 +200,25 @@ client, a Cognito Hosted UI domain, a private ECR repository (empty), the
 `voyage-api-key` and `gemini-api-key` application secrets, three ECS execution
 roles, and two ECS application task roles.
 
-Phase 6C did **not** create: an ALB, an ECS cluster/service/task, a pushed
-container image, the `database-url-app`/`database-url-migrate` secrets (these
-require PostgreSQL roles that do not exist until an in-VPC task creates them in
-Phase 6D), CloudWatch log groups, a DNS resource, or a Vercel deployment.
+Phase 6D pushed a `linux/amd64` image to that repository, created the ECS
+cluster, four CloudWatch log groups, bootstrapped `kyl_migrate`/`kyl_app`
+PostgreSQL roles and the `database-url-app`/`database-url-migrate` secrets from
+a temporary in-VPC task (whose IAM access was deleted immediately after), ran
+`alembic upgrade head` to `20260904_0006`, and stood up the worker service, the
+ALB + target group, and the API service. The API is reachable at
+`http://know-your-lease-prod-822884909.ca-central-1.elb.amazonaws.com` for
+infrastructure checks only -- **its HTTP:80 listener was deleted** after
+verification passed, so nothing currently serves application traffic there; the
+ALB, target group, and API service were kept running per the approved
+Phase 6D→6E boundary. See
+[docs/aws-resource-inventory.md](aws-resource-inventory.md#phase-6d-resources)
+for every identifier and
+[docs/aws-resource-inventory.md](aws-resource-inventory.md#verified-phase-6d-state)
+for what was verified live.
+
+Phase 6D did **not** create: an ACM certificate, an HTTPS listener, a DNS
+resource, or a Vercel deployment -- those are Phase 6E. No Cognito callback URL
+was changed; the app client still accepts only `localhost` origins.
 
 ## Phase 6B live-account deviation
 
@@ -222,3 +237,42 @@ called separately with `MfaConfiguration=OPTIONAL` and
 `SoftwareTokenMfaConfiguration.Enabled=true`. The result is optional TOTP-only
 MFA with no SMS/SNS role and no per-message SMS cost -- functionally what was
 requested, reached in two API calls instead of one.
+
+## Phase 6D live-account deviations
+
+The `KnowYourLeaseDeployerPolicy` v2 update needed to trim beyond the originally
+planned statement set: AWS customer-managed policies are capped at 6,144 bytes,
+and the full addition (ECR push, ECS cluster/task/service, log groups, ELBv2,
+service-linked-role creation) exceeded it by ~200 bytes with every action
+included. `logs:TagResource` and the log-stream-level ARN suffix were dropped
+(log groups are created without inline tags as a result; retention and
+functionality are unaffected) and new statement `Sid`s were shortened; all 15
+pre-existing statements, including all 5 Deny guardrails, were verified
+byte-identical before publishing.
+
+Two real bugs surfaced only once the bootstrap task actually ran inside the
+VPC, where they could not have been caught by static review:
+
+1. **The RDS-managed master secret contains only `username`/`password`**, not
+   connection details. The initial code assumed an RDS-secret shape that
+   includes `host`/`port`/`dbname` (true for some AWS-managed secret types, not
+   this one) and failed with `KeyError: 'host'`. Fixed by passing the endpoint,
+   port, and database name as plain (non-secret) task environment variables
+   instead.
+2. **PostgreSQL's `CREATE ROLE`/`ALTER ROLE ... PASSWORD` clause rejects a
+   query bind parameter** (`syntax error at or near "$1"`) -- the password must
+   be a literal in role DDL, unlike ordinary `SELECT`/DML statements. Fixed
+   using `psycopg.sql.Literal`, which quotes and escapes the value safely into
+   the statement text without the injection risk a raw f-string would carry.
+
+Both fixes required a new image build. Because ECR is `IMMUTABLE` and the
+already-pushed tag had already been used in one failed task run, and this
+session was instructed not to commit, the corrected builds were pushed as
+`<git-sha>-fix1` and `<git-sha>-fix2` rather than reusing or re-deriving the
+original SHA tag. `<git-sha>-fix2` is the digest every task definition in this
+phase references. **This deviates from pure "one Git SHA, one tag" tagging**;
+the honest state is that the image running in AWS contains the
+`backend/app/bootstrap/` code as of this session's uncommitted working tree,
+not literally the tree at `<git-sha>`. A future commit that includes this code
+should re-tag/re-push under the resulting real SHA so the two stay
+truthfully linked.

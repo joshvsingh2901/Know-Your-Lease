@@ -1,0 +1,31 @@
+{
+  "family": "know-your-lease-migration",
+  "networkMode": "awsvpc",
+  "requiresCompatibilities": ["FARGATE"],
+  "cpu": "256",
+  "memory": "1024",
+  "runtimePlatform": { "cpuArchitecture": "X86_64", "operatingSystemFamily": "LINUX" },
+  "executionRoleArn": "arn:aws:iam::297784246437:role/kyl-migration-execution",
+  "containerDefinitions": [
+    {
+      "name": "migration",
+      "image": "297784246437.dkr.ecr.ca-central-1.amazonaws.com/know-your-lease-backend@sha256:da415a7320f1324d98dfe1bf0934fbc2749f53f1f8c69f0f0da024dc2835a248",
+      "essential": true,
+      "command": ["alembic", "upgrade", "head"],
+      "environment": [
+        { "name": "ENVIRONMENT", "value": "production" }
+      ],
+      "secrets": [
+        { "name": "DATABASE_URL", "valueFrom": "arn:aws:secretsmanager:ca-central-1:297784246437:secret:know-your-lease/prod/database-url-migrate-6odMAo" }
+      ],
+      "logConfiguration": {
+        "logDriver": "awslogs",
+        "options": {
+          "awslogs-group": "/ecs/know-your-lease/migration",
+          "awslogs-region": "ca-central-1",
+          "awslogs-stream-prefix": "migration"
+        }
+      }
+    }
+  ]
+}

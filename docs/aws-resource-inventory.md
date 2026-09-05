@@ -85,6 +85,96 @@ Resource rows were added immediately after each successful create operation.
 The migration workload has no task role at all: it makes no AWS API calls beyond
 what its execution role already grants (image pull, log write, its one secret).
 
+### Phase 6D resources
+
+| Resource type | Name | ARN/ID | Region | Purpose | Ongoing cost | Teardown command/note |
+| --- | --- | --- | --- | --- | --- | --- |
+| IAM policy version | `KnowYourLeaseDeployerPolicy` v2 | same policy ARN, `VersionId=v2` | global | Added ECR image-push, ECS cluster/task-def/run-task/service, CloudWatch Logs group management, ELBv2 management, and a scoped `iam:CreateServiceLinkedRole`; all 15 Phase 6C statements (including all 5 Deny guardrails) preserved byte-identical | No fixed charge | `aws iam delete-policy-version --policy-arn arn:aws:iam::297784246437:policy/KnowYourLeaseDeployerPolicy --version-id v2` then `set-default-policy-version --version-id v1`, once 6D resources are gone |
+| ECR image | `know-your-lease-backend` | tags `<sha>`, `<sha>-fix1`, `<sha>-fix2`; running digest `sha256:da415a7320f1324d98dfe1bf0934fbc2749f53f1f8c69f0f0da024dc2835a248` | `ca-central-1` | Production image; `<sha>` and `<sha>-fix1` are earlier same-session bootstrap-script iterations kept only because the repository is `IMMUTABLE` and nothing else references them | ~$0.10/GB-month for all tags combined (~450 MB total) | `aws ecr batch-delete-image --repository-name know-your-lease-backend --image-ids imageTag=<sha> imageTag=<sha>-fix1 imageTag=<sha>-fix2` |
+| ECS cluster | `know-your-lease-prod` | `arn:aws:ecs:ca-central-1:297784246437:cluster/know-your-lease-prod` | `ca-central-1` | Fargate-only cluster; `containerInsights=disabled`; no EC2 capacity, no ECS Exec | No fixed charge (Fargate task-hours below are the real cost) | After both services and all task definitions are gone: `aws ecs delete-cluster --cluster know-your-lease-prod` |
+| CloudWatch log group | `/ecs/know-your-lease/api` | same | `ca-central-1` | API container stdout/stderr, 7-day retention | Usage-based, negligible at this volume | `aws logs delete-log-group --log-group-name /ecs/know-your-lease/api` |
+| CloudWatch log group | `/ecs/know-your-lease/worker` | same | `ca-central-1` | Worker container logs, 7-day retention | Usage-based, negligible | `aws logs delete-log-group --log-group-name /ecs/know-your-lease/worker` |
+| CloudWatch log group | `/ecs/know-your-lease/migration` | same | `ca-central-1` | Migration + `--verify` task logs, 7-day retention | Usage-based, negligible | `aws logs delete-log-group --log-group-name /ecs/know-your-lease/migration` |
+| CloudWatch log group | `/ecs/know-your-lease/bootstrap` | same | `ca-central-1` | One-off DB bootstrap task logs, 7-day retention | Usage-based, negligible | `aws logs delete-log-group --log-group-name /ecs/know-your-lease/bootstrap` |
+| Secrets Manager secret | `know-your-lease/prod/database-url-app` | `arn:aws:secretsmanager:ca-central-1:297784246437:secret:know-your-lease/prod/database-url-app-FsTQ8V` | `ca-central-1` | `kyl_app` connection string (DML only, no DDL); readable by `kyl-api-execution` and `kyl-worker-execution` only | ~$0.40/month | `aws secretsmanager delete-secret --secret-id know-your-lease/prod/database-url-app --force-delete-without-recovery` |
+| Secrets Manager secret | `know-your-lease/prod/database-url-migrate` | `arn:aws:secretsmanager:ca-central-1:297784246437:secret:know-your-lease/prod/database-url-migrate-6odMAo` | `ca-central-1` | `kyl_migrate` connection string (schema owner); readable by `kyl-migration-execution` only | ~$0.40/month | `aws secretsmanager delete-secret --secret-id know-your-lease/prod/database-url-migrate --force-delete-without-recovery` |
+| ECS task definition | `know-your-lease-api` | family, revision 1 | `ca-central-1` | API container spec: execution `kyl-api-execution`, task `kyl-api-task`, port 8000 | No fixed charge | `aws ecs deregister-task-definition --task-definition know-your-lease-api:1` |
+| ECS task definition | `know-your-lease-worker` | family, revision 1 | `ca-central-1` | Worker container spec: execution `kyl-worker-execution`, task `kyl-worker-task`, no ports | No fixed charge | `aws ecs deregister-task-definition --task-definition know-your-lease-worker:1` |
+| ECS task definition | `know-your-lease-migration` | family, revision 1 | `ca-central-1` | One-off `alembic upgrade head`; execution `kyl-migration-execution`; **no task role** | No fixed charge | `aws ecs deregister-task-definition --task-definition know-your-lease-migration:1` |
+| ECS task definition | `know-your-lease-bootstrap` | family, revisions 1-3 | `ca-central-1` | One-off DB role bootstrap; revisions 1-2 used a now-deleted bootstrap execution/task role pair and failed (see Bootstrap notes below); revision 3 succeeded | No fixed charge | `aws ecs deregister-task-definition --task-definition know-your-lease-bootstrap:<1\|2\|3>` |
+| ECS service | `know-your-lease-api` | `arn:aws:ecs:ca-central-1:297784246437:service/know-your-lease-prod/know-your-lease-api` | `ca-central-1` | `desiredCount=1`, both public subnets, `api-sg`, registered to the ALB target group, circuit breaker + rollback enabled | Fargate task-hours (below) | `aws ecs update-service --cluster know-your-lease-prod --service know-your-lease-api --desired-count 0` then `aws ecs delete-service --cluster know-your-lease-prod --service know-your-lease-api --force` |
+| ECS service | `know-your-lease-worker` | `arn:aws:ecs:ca-central-1:297784246437:service/know-your-lease-prod/know-your-lease-worker` | `ca-central-1` | `desiredCount=1`, both public subnets, `worker-sg`, no load balancer, circuit breaker + rollback enabled | Fargate task-hours (below) | Same pattern with `--service know-your-lease-worker` |
+| ALB | `know-your-lease-prod` | `arn:aws:elasticloadbalancing:ca-central-1:297784246437:loadbalancer/app/know-your-lease-prod/27257d9bb115ef1a` | `ca-central-1` | Internet-facing, both public subnets, `alb-sg`; **no listener currently attached** (see below) | ~$0.024/hour + 2 public IPv4 addresses (kept per the approved Phase 6D/6E boundary) | `aws elbv2 delete-load-balancer --load-balancer-arn <arn>` (after the target group is free of the API service) |
+| ALB target group | `know-your-lease-api` | `arn:aws:elasticloadbalancing:ca-central-1:297784246437:targetgroup/know-your-lease-api/4f709e08df7301ae` | `ca-central-1` | `ip` target type, HTTP:8000, health check `GET /health`, `deregistration_delay=30s`; currently one healthy target (the API task) | No separate charge | `aws elbv2 delete-target-group --target-group-arn <arn>` (after the API service stops using it) |
+
+**Temporary bootstrap IAM (created and deleted within this same session):**
+`kyl-bootstrap-execution` and `kyl-bootstrap-task` were created with a trust
+policy scoped to `ecs-tasks.amazonaws.com` (`aws:SourceAccount`/`aws:SourceArn`
+hardened). The task role could read only the RDS-managed master secret and
+create/update only `know-your-lease/prod/database-url-*`; the execution role
+carried only the AWS-managed `AmazonECSTaskExecutionRolePolicy` baseline (no
+Secrets Manager access at all -- the master secret's ARN travelled as plain,
+non-sensitive task configuration, and the task role fetched the value itself at
+runtime). Both roles, and the task role's inline policy, were deleted
+immediately after the bootstrap task exited 0 and all five hard-gate conditions
+were confirmed. Verified after deletion: `simulate-principal-policy` against all
+five long-lived project roles for `secretsmanager:GetSecretValue` on the RDS
+master secret ARN returns `implicitDeny` for every one of them.
+
+### Required teardown order (Phase 6D, before Phase 6C)
+
+1. Scale both services to 0, then force-delete them (API before worker, since
+   the API is the one with an external dependency on the target group):
+
+   ```bash
+   aws ecs update-service --cluster know-your-lease-prod --service know-your-lease-api --desired-count 0
+   aws ecs delete-service --cluster know-your-lease-prod --service know-your-lease-api --force
+   aws ecs update-service --cluster know-your-lease-prod --service know-your-lease-worker --desired-count 0
+   aws ecs delete-service --cluster know-your-lease-prod --service know-your-lease-worker --force
+   ```
+
+2. Delete the target group (no listener exists to block this):
+
+   ```bash
+   aws elbv2 delete-target-group --target-group-arn arn:aws:elasticloadbalancing:ca-central-1:297784246437:targetgroup/know-your-lease-api/4f709e08df7301ae
+   ```
+
+3. Delete the ALB:
+
+   ```bash
+   aws elbv2 delete-load-balancer --load-balancer-arn arn:aws:elasticloadbalancing:ca-central-1:297784246437:loadbalancer/app/know-your-lease-prod/27257d9bb115ef1a
+   ```
+
+4. Deregister every task-definition revision (API, worker, migration, and all
+   three bootstrap revisions).
+
+5. Force-delete both database-url secrets so no recovery-window billing
+   continues:
+
+   ```bash
+   aws secretsmanager delete-secret --secret-id know-your-lease/prod/database-url-app --force-delete-without-recovery
+   aws secretsmanager delete-secret --secret-id know-your-lease/prod/database-url-migrate --force-delete-without-recovery
+   ```
+
+6. Delete all four log groups.
+
+7. Delete the cluster.
+
+8. Delete all three ECR image tags (or the whole repository, which is Phase 6C
+   scope -- leave it for final teardown unless the account is being closed).
+
+9. Revert the deployer policy to v1 (optional -- v2 is a superset with the same
+   guardrails; only do this once nothing in 6D-6E era needs the extra actions):
+
+   ```bash
+   aws iam set-default-policy-version --policy-arn arn:aws:iam::297784246437:policy/KnowYourLeaseDeployerPolicy --version-id v1
+   aws iam delete-policy-version --policy-arn arn:aws:iam::297784246437:policy/KnowYourLeaseDeployerPolicy --version-id v2
+   ```
+
+The `kyl_migrate`/`kyl_app` PostgreSQL roles live inside RDS and disappear only
+when the RDS instance itself is deleted (Phase 6B teardown); there is no
+separate step for them here.
+
 ## Required teardown order (Phase 6C, before Phase 6B)
 
 Phase 6C resources sit above the Phase 6B data plane and must be removed first if
@@ -337,11 +427,70 @@ calls, not assumed from creation parameters:
 
 ## Pgvector readiness
 
-The repository's base Alembic migration `20260806_0001` already runs
-`CREATE EXTENSION IF NOT EXISTS vector`. The RDS endpoint is intentionally private,
-and Phase 6B creates no compute inside the VPC, so the extension has not yet been
-executed or queried on this instance. Pgvector must be verified after the Phase 6D
-migration task runs; this inventory does not claim it is currently active.
+**Active, verified.** The Phase 6D bootstrap task ran `CREATE EXTENSION IF NOT
+EXISTS vector` as the RDS master user, and the Phase 6D migration task's
+`--verify` run confirmed `pg_extension` contains `vector` after `alembic upgrade
+head` completed. This is a live, in-VPC confirmation, not an inference from the
+migration file.
+
+## Verified Phase 6D state
+
+All of the following were confirmed live this session, not assumed from
+creation parameters:
+
+- `KnowYourLeaseDeployerPolicy` v2 is the default version; all 15 Phase 6C
+  statements (including all 5 Deny guardrails) verified byte-identical to v1
+  before publishing; `simulate-principal-policy` re-confirmed
+  `freetier:UpgradeAccountPlan`, `organizations:CreateOrganization`, and
+  `iam:CreateUser` still evaluate as `explicitDeny` after the version bump.
+- Image pushed for `linux/amd64` with `--provenance=false --sbom=false`
+  (`imageManifestMediaType: application/vnd.oci.image.manifest.v1+json`, a
+  single-platform manifest, not an index). Two earlier same-session iterations
+  (plain SHA tag, `-fix1`) failed inside the bootstrap task before the RDS
+  master secret's actual shape (`username`/`password` only, no connection
+  details) and PostgreSQL's requirement that role-DDL passwords be a literal
+  rather than a bind parameter were both discovered and fixed; `-fix2` is the
+  digest every task definition references.
+- ECS cluster `ACTIVE`, `containerInsights=disabled`, Fargate-only.
+- All four log groups exist with `retentionInDays=7`.
+- Bootstrap task (revision 3) exited 0; `kyl_migrate_role_exists`,
+  `kyl_app_role_exists`, `vector_extension_present`,
+  `kyl_migrate_can_create_in_schema`, and `kyl_app_cannot_create_in_schema` all
+  logged `PASS`; no password or connection string appears in the log.
+- Both bootstrap-only IAM roles deleted immediately after; re-verified via
+  `simulate-principal-policy` that none of the five long-lived project roles
+  can read the RDS master secret.
+- `simulate-principal-policy`, 9 cases: `kyl-api-execution`/`kyl-worker-execution`
+  can read `database-url-app`; only `kyl-migration-execution` can read
+  `database-url-migrate`; cross-reads and Voyage/Gemini reads by the migration
+  role all evaluate `implicitDeny` -- all 9 matched intent with zero policy
+  edits needed (the Phase 6C name-prefix ARN design worked as intended).
+- Migration task exited 0; log shows all six migrations running from empty to
+  `20260904_0006`. A second one-off run using the same task definition with a
+  `containerOverrides` command swap (`--verify`, no new registration needed)
+  exited 0 with 22/22 checks `PASS`: `vector` present; `users`, `documents`,
+  `document_chunks`, `grounded_answer_cache` all exist; `kyl_app` denied
+  `CREATE` on the schema; `kyl_app` granted `SELECT`/`INSERT`/`UPDATE`/`DELETE`
+  on all four tables via `has_table_privilege`, proving the `ALTER DEFAULT
+  PRIVILEGES` mechanism reached real, post-migration objects.
+- Worker service: exactly one task ARN throughout a 5-minute observation window
+  (`rolloutState: COMPLETED` from the third check onward), log shows "Ingestion
+  worker started" with no restart.
+- ALB reached `active` state; target group registered one target that reached
+  `healthy`; API service `rolloutState: COMPLETED`, log shows a clean Uvicorn
+  startup with the internal ALB health check already returning 200 before any
+  external check ran.
+- External `GET /health` → `200 {"status":"ok"}`; external `GET /documents`
+  (no token) → `401 {"detail":"Not authenticated."}` with a
+  `WWW-Authenticate: Bearer` header -- proves the deployed API enforces
+  Cognito auth rather than bypassing it.
+- HTTP:80 listener deleted; three follow-up requests to the ALB DNS name all
+  returned connection failures (`HTTP 000`), confirming port 80 serves no
+  application traffic. The ALB, target group, and API service were left
+  running per the approved Phase 6D→6E boundary.
+- `accountPlanType=FREE`, `accountPlanStatus=ACTIVE`, credits unchanged at
+  $120.00, checked both before provisioning began and after every resource
+  above was created.
 
 ## Current list-price estimate
 
@@ -376,4 +525,31 @@ charge at any usage level.
 
 This is list price before tax; the Free plan's remaining $120.00 credit absorbs
 it, and the account's payable amount was confirmed at $0 both before and after
-Phase 6C. ECR storage becomes billable once Phase 6D or later pushes an image.
+Phase 6C.
+
+### Phase 6D incremental cost
+
+Live AWS Price List data for Canada Central: Fargate `$0.04456/vCPU-hour` and
+`$0.004865/GB-hour`; ALB `$0.02475/hour` plus `$0.0088/LCU-hour`; public IPv4
+`$0.005/hour per address`.
+
+| Item | Daily |
+| --- | ---: |
+| API Fargate (0.25 vCPU + 1 GiB) | $0.384 |
+| Worker Fargate (0.25 vCPU + 1 GiB) | $0.384 |
+| 2 task public IPv4 addresses | $0.240 |
+| ALB hours (no listener attached; LCU usage ≈ $0) | $0.594 |
+| 2 ALB public IPv4 addresses (one per AZ) | $0.240 |
+| ECR storage (3 image tags, ~450 MB combined) | ~$0.002 |
+| 2 new secrets (`database-url-app`, `database-url-migrate`) | $0.026 |
+| **Phase 6D total** | **≈ $1.87** |
+| Phase 6B + 6C total (unchanged) | $16.94 |
+| **Running total** | **≈ $18.81/month, ≈ $2.51/day** |
+
+Actual payable amount was confirmed at **$0** immediately before provisioning
+began and again after every resource above was created and verified; the
+account remained `FREE`/`ACTIVE` with the full $120.00 credit balance
+unaffected throughout (usage draws down credit, not the payment method). The
+ALB is the single largest new line item at ~$0.83/day combined (hours + its two
+IPs) -- deleting it, rather than only its listener, would be the next lever if
+cost needs to drop further before Phase 6E.

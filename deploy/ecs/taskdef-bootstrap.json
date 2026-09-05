@@ -1,0 +1,33 @@
+{
+  "family": "know-your-lease-bootstrap",
+  "networkMode": "awsvpc",
+  "requiresCompatibilities": ["FARGATE"],
+  "cpu": "256",
+  "memory": "1024",
+  "runtimePlatform": { "cpuArchitecture": "X86_64", "operatingSystemFamily": "LINUX" },
+  "executionRoleArn": "arn:aws:iam::297784246437:role/kyl-bootstrap-execution",
+  "taskRoleArn": "arn:aws:iam::297784246437:role/kyl-bootstrap-task",
+  "containerDefinitions": [
+    {
+      "name": "bootstrap",
+      "image": "297784246437.dkr.ecr.ca-central-1.amazonaws.com/know-your-lease-backend@sha256:da415a7320f1324d98dfe1bf0934fbc2749f53f1f8c69f0f0da024dc2835a248",
+      "essential": true,
+      "command": ["python", "-m", "app.bootstrap.create_database_roles"],
+      "environment": [
+        { "name": "RDS_MASTER_SECRET_ARN", "value": "arn:aws:secretsmanager:ca-central-1:297784246437:secret:rds!db-ca7ef035-6f1f-48cf-8f62-30d9f6b0d639-vEm6Og" },
+        { "name": "AWS_REGION", "value": "ca-central-1" },
+        { "name": "DB_HOST", "value": "know-your-lease-prod.czukqicy26su.ca-central-1.rds.amazonaws.com" },
+        { "name": "DB_PORT", "value": "5432" },
+        { "name": "DB_NAME", "value": "know_your_lease" }
+      ],
+      "logConfiguration": {
+        "logDriver": "awslogs",
+        "options": {
+          "awslogs-group": "/ecs/know-your-lease/bootstrap",
+          "awslogs-region": "ca-central-1",
+          "awslogs-stream-prefix": "bootstrap"
+        }
+      }
+    }
+  ]
+}

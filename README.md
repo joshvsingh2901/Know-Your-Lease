@@ -68,7 +68,7 @@ flowchart LR
 
 ### Authentication and ownership
 
-Every document-scoped route requires an authenticated user: a verified Cognito access token (`AUTH_MODE=cognito`) or a fixed local-development user (`AUTH_MODE=disabled`, the local/test default). A single access boundary (`document_access.py`) resolves a document only when it is owned by the current user; unowned or another user's document returns 404, never 403, so a document UUID cannot be used to probe for someone else's lease. See [docs/authentication.md](docs/authentication.md) for the full design and [docs/aws-identity.md](docs/aws-identity.md) for the live Cognito pool provisioned in Phase 6C — no ECS service runs the API against it yet.
+Every document-scoped route requires an authenticated user: a verified Cognito access token (`AUTH_MODE=cognito`) or a fixed local-development user (`AUTH_MODE=disabled`, the local/test default). A single access boundary (`document_access.py`) resolves a document only when it is owned by the current user; unowned or another user's document returns 404, never 403, so a document UUID cannot be used to probe for someone else's lease. See [docs/authentication.md](docs/authentication.md) for the full design and [docs/aws-identity.md](docs/aws-identity.md) for the live Cognito pool. As of Phase 6D the API runs as an ECS service and was verified to enforce this over plain HTTP (`GET /documents` without a token returns 401) before that temporary listener was deleted — there is no HTTPS listener yet, so nothing currently serves real application traffic.
 
 ### Ingestion
 
@@ -109,7 +109,7 @@ The project intentionally avoids LangChain, LlamaIndex, a second vector database
 - API production configuration requires S3, SQS, Cognito, an exact HTTPS frontend origin, both provider keys, and disabled debug routes. Worker and migration validation are narrower so those tasks do not receive API-only configuration or secrets.
 - Every document route passes through one centralized access seam that enforces per-user document ownership; unowned/another user's document returns 404, never 403.
 
-Every document belongs to exactly one authenticated user. Browser `localStorage` remembers an active document UUID for convenience only, never as authorization — the backend re-checks ownership on every request. This repository implements Cognito verification and ownership enforcement in code; a live Cognito user pool exists as of Phase 6C, though no ECS service is deployed against it yet — see [docs/authentication.md](docs/authentication.md) and [docs/aws-identity.md](docs/aws-identity.md).
+Every document belongs to exactly one authenticated user. Browser `localStorage` remembers an active document UUID for convenience only, never as authorization — the backend re-checks ownership on every request. This repository implements Cognito verification and ownership enforcement in code, and as of Phase 6D it runs as a deployed ECS service against a live Cognito pool — see [docs/authentication.md](docs/authentication.md) and [docs/aws-identity.md](docs/aws-identity.md). No HTTPS listener exists yet (Phase 6E), so the deployment is not yet open to real user traffic.
 
 ## Repository Structure
 
@@ -207,7 +207,7 @@ All routes other than `/health` require `Authorization: Bearer <token>` when `AU
 
 Phase 6A prepared workload-specific configuration for the approved production target. Phase 6B has provisioned the tagged `ca-central-1` network and data plane: a two-AZ VPC, public task/ALB subnets, isolated database subnets, scoped security groups, a free S3 Gateway endpoint, private RDS PostgreSQL 18.6, a private S3 bucket, and encrypted SQS/DLQ queues.
 
-The API, worker, and migration task use the same Docker image with workload-specific validation and least-secret configuration. Phase 6C provisioned a non-root deployment identity, a live Cognito user pool, a private ECR repository, the Voyage/Gemini application secrets, and the ECS execution/task IAM roles. See the [deployment overview](docs/deployment.md), [AWS deployment preparation](docs/aws-deployment.md), [AWS identity runbook](docs/aws-identity.md), and [live resource inventory](docs/aws-resource-inventory.md). ECS cluster/service/tasks, ALB, DNS, and Vercel remain unprovisioned, so there is no hosted application yet.
+The API, worker, and migration task use the same Docker image with workload-specific validation and least-secret configuration. Phase 6C provisioned a non-root deployment identity, a live Cognito user pool, a private ECR repository, and the ECS execution/task IAM roles; Phase 6D pushed an image, bootstrapped least-privilege PostgreSQL roles from a temporary in-VPC task, ran Alembic against RDS, and stood up an ECS cluster running a stable worker service and an API service behind an ALB. See the [deployment overview](docs/deployment.md), [AWS deployment preparation](docs/aws-deployment.md), [AWS identity runbook](docs/aws-identity.md), and [live resource inventory](docs/aws-resource-inventory.md). DNS, ACM/HTTPS, and Vercel remain unprovisioned (Phase 6E), so the deployment is not yet open to real user traffic.
 
 ## Testing
 
@@ -247,12 +247,12 @@ for the job design, migration policy, local commands, and branch-protection step
 
 ## Current Limitations
 
-- Cognito authentication and per-document ownership are implemented in code; a live Cognito user pool exists (Phase 6C), but no ECS service is deployed against it and its app client accepts only `localhost` callback/logout URLs until a Vercel hostname exists
+- Cognito authentication and per-document ownership are implemented in code and deployed (Phase 6D), but the Cognito app client still accepts only `localhost` callback/logout URLs, and the API's ALB has no HTTPS listener, until a Vercel hostname exists (Phase 6E)
 - Access tokens are stored in browser `localStorage`, which is readable by a successful XSS; a backend-for-frontend with httpOnly cookies would remove that exposure but is out of this phase's scope
 - SQS remains at-least-once: the queue and DLQ are provisioned, but automated replay, visibility heartbeats, and cross-process provider rate coordination remain operational work
 - No re-ingestion endpoint or version-bump producer: every document is created at ingestion version 1, and the version/attempt machinery that guards duplicate/stale delivery has no caller that requests a later version yet
 - Single-process provider rate coordination
-- The Phase 6B network/data plane and Phase 6C identity/artifacts/secrets (Cognito, ECR, IAM roles, Voyage/Gemini secrets) exist temporarily, but ECS cluster/service/tasks, ALB, DNS, and application deployment remain pending; RDS backup retention is limited to one day by the account's Free plan
+- The Phase 6B network/data plane, Phase 6C identity/artifacts/secrets, and Phase 6D ECS deployment (cluster, worker service, API service behind an ALB with no HTTPS listener yet) exist temporarily; DNS and a Vercel deployment remain pending; RDS backup retention is limited to one day by the account's Free plan
 - No OCR, malware scanning, or encrypted retention workflow
 - No calibrated retrieval threshold, reranker, or hybrid lexical retrieval
 - No chat history or follow-up question rewriting
