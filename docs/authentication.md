@@ -3,9 +3,13 @@
 Phase 4 turns the single-user/local document model into a real multi-user security
 model: every document belongs to exactly one user, and every document-scoped
 operation enforces that ownership. This document describes what is implemented in
-application code today. **It does not describe provisioned infrastructure**: this
-repository does not create or run a live Cognito user pool. `AUTH_MODE=cognito`
-requires one to already exist; nothing here stands one up.
+application code. As of Phase 6C, a live Cognito user pool (`know-your-lease-prod`,
+`ca-central-1_Lhw9u8Yh6`) and public app client (`know-your-lease-web`) exist and
+were verified reachable -- see [docs/aws-identity.md](aws-identity.md) and
+[docs/aws-resource-inventory.md](aws-resource-inventory.md) for what was created
+and how to verify it independently. No ECS/Fargate service runs the API against
+that pool yet, and the app client's callback/logout URLs are `localhost` only
+until a Vercel hostname exists (Phase 6E).
 
 ## Cognito authentication flow
 
@@ -198,7 +202,10 @@ database's legacy rows have all been explicitly assigned.
 
 ## Current limitations
 
-- No live Cognito user pool is provisioned or run by this repository.
+- A live Cognito user pool exists (Phase 6C), but no ECS/Fargate service runs the
+  backend against it yet, and its app client only accepts `localhost` callback/
+  logout URLs until a Vercel hostname exists (Phase 6E must append, not replace,
+  those URLs).
 - No re-ingestion endpoint or other producer advances a document past ingestion
   version 1; nothing in the current application requests a higher `ingestion_version`
   for an existing document.

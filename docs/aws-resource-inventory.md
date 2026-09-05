@@ -1,8 +1,9 @@
 # AWS Resource Inventory
 
 This file records the temporary Know Your Lease production resources created by
-Phase 6B. It contains identifiers and teardown instructions only; never put
-passwords, database URLs, API keys, or other secret values here.
+Phase 6B and Phase 6C. It contains identifiers and teardown instructions only;
+never put passwords, database URLs, API keys, access key secret values, or other
+secret material here.
 
 ## Deployment metadata
 
@@ -14,7 +15,8 @@ passwords, database URLs, API keys, or other secret values here.
 | Environment tag | `Environment=production` |
 | Temporary tag | `TemporaryDeployment=true` |
 | Intended lifetime | Approximately three days for portfolio validation |
-| Provisioning status | Phase 6B complete; resources retained for later phases |
+| Provisioning status | Phase 6B and 6C complete; resources retained for later phases |
+| Routine CLI identity | `arn:aws:iam::297784246437:user/kyl-deployer` (profile `kyl-deploy`), as of Phase 6C -- see [aws-identity.md](aws-identity.md) |
 
 ## Live account constraints and deviations
 
@@ -23,10 +25,18 @@ passwords, database URLs, API keys, or other secret values here.
   seven-day backup retention. The temporary instance therefore uses one-day
   automated-backup retention. Deletion protection remains enabled, and teardown
   must still make an explicit final-snapshot decision.
+- `CreateUserPool` rejected `MfaConfiguration=OPTIONAL` without SMS/SNS configured.
+  The pool was created with MFA `OFF`, then `set-user-pool-mfa-config` enabled
+  `OPTIONAL` with software-token (TOTP) MFA only -- no SMS, no SNS role, no
+  per-message cost.
 
-The CLI identity used for Phase 6B preflight was
-`arn:aws:iam::297784246437:root`. Use a least-privilege administrative role for
-future deployments where practical.
+The CLI identity used for Phase 6B preflight and the first half of Phase 6C
+(creating `kyl-deployer` itself, which nothing else could do) was
+`arn:aws:iam::297784246437:root`. Every other Phase 6C resource, and all routine
+work from here forward, uses `kyl-deployer`. See
+[aws-identity.md](aws-identity.md) for the full remediation record, including why
+`aws login` could not be used for the non-root identity in this session and what
+was verified before and after the switch.
 
 ## Resources
 
@@ -58,8 +68,93 @@ Resource rows were added immediately after each successful create operation.
 | S3 bucket | `know-your-lease-prod-297784246437-ca-central-1` | `arn:aws:s3:::know-your-lease-prod-297784246437-ca-central-1` | `ca-central-1` | Private PDFs under `uploads/<document-uuid>.pdf` | Usage-based only | Confirm target, remove objects/versions if any, then `aws s3api delete-bucket --region ca-central-1 --bucket know-your-lease-prod-297784246437-ca-central-1` |
 | SQS DLQ | `know-your-lease-ingestion-prod-dlq` | `arn:aws:sqs:ca-central-1:297784246437:know-your-lease-ingestion-prod-dlq` | `ca-central-1` | Encrypted 14-day dead-letter retention | Usage-based only | `aws sqs delete-queue --region ca-central-1 --queue-url https://sqs.ca-central-1.amazonaws.com/297784246437/know-your-lease-ingestion-prod-dlq` |
 | SQS queue | `know-your-lease-ingestion-prod` | `arn:aws:sqs:ca-central-1:297784246437:know-your-lease-ingestion-prod` | `ca-central-1` | Encrypted ingestion queue; 900-second visibility, 20-second long polling, four-day retention, DLQ after five receives | Usage-based only | Delete before DLQ: `aws sqs delete-queue --region ca-central-1 --queue-url https://sqs.ca-central-1.amazonaws.com/297784246437/know-your-lease-ingestion-prod` |
+| IAM customer-managed policy | `KnowYourLeaseDeployerPolicy` | `arn:aws:iam::297784246437:policy/KnowYourLeaseDeployerPolicy` | `ca-central-1` (IAM is global) | Scoped admin policy for the temporary deployment identity; explicit Deny on `freetier:UpgradeAccountPlan`, `organizations:*`, new IAM users/access keys, and self-lockout on `kyl-deployer` | No fixed charge | Detach from `kyl-deployer` last, then `aws iam delete-policy --policy-arn arn:aws:iam::297784246437:policy/KnowYourLeaseDeployerPolicy` |
+| IAM user | `kyl-deployer` | `arn:aws:iam::297784246437:user/kyl-deployer` | `ca-central-1` (IAM is global) | Non-root deployment identity; console login profile exists (password-reset-required, unused this session) and one access key exists for the `kyl-deploy` CLI profile; no `AdministratorAccess` | No fixed charge | Last of all Phase 6C resources: delete the access key, delete the login profile, detach `KnowYourLeaseDeployerPolicy`, then `aws iam delete-user --user-name kyl-deployer` |
+| Cognito user pool | `know-your-lease-prod` | `ca-central-1_Lhw9u8Yh6` | `ca-central-1` | LITE tier, email sign-in/verification, self-signup, optional TOTP MFA, advanced security OFF, deletion protection ACTIVE | Per-MAU only (~$0.0055/MAU at LITE, verified live price list) | First disable protection: `aws cognito-idp update-user-pool --user-pool-id ca-central-1_Lhw9u8Yh6 --deletion-protection INACTIVE`; delete domain and client first (see below), then `aws cognito-idp delete-user-pool --user-pool-id ca-central-1_Lhw9u8Yh6` |
+| Cognito app client | `know-your-lease-web` | `4sq1r3l1flfv1acrkrqc69aoh9` (pool `ca-central-1_Lhw9u8Yh6`) | `ca-central-1` | Public SPA client, no secret, Authorization Code + PKCE only, scopes `openid email`, callbacks `http://localhost:3000/auth/callback`/`http://localhost:3000/` | No separate charge | `aws cognito-idp delete-user-pool-client --user-pool-id ca-central-1_Lhw9u8Yh6 --client-id 4sq1r3l1flfv1acrkrqc69aoh9` |
+| Cognito Hosted UI domain | `know-your-lease-prod` | Domain prefix on pool `ca-central-1_Lhw9u8Yh6`; CloudFront `dq9dozspu8y40.cloudfront.net` | `ca-central-1` | Classic managed login (v1) Hosted UI; verified reachable (login page HTTP 200, JWKS HTTP 200) | No separate charge | Must be deleted before the pool: `aws cognito-idp delete-user-pool-domain --user-pool-id ca-central-1_Lhw9u8Yh6 --domain know-your-lease-prod` |
+| ECR repository | `know-your-lease-backend` | `arn:aws:ecr:ca-central-1:297784246437:repository/know-your-lease-backend` | `ca-central-1` | Private, AES-256, immutable tags, basic scan-on-push, empty (no image pushed); lifecycle policy expires untagged images after 7 days and caps tagged images at 10 | $0 while empty; ~$0.10/GB-month once images exist | `aws ecr delete-repository --repository-name know-your-lease-backend --force` (force removes any images with it) |
+| Secrets Manager secret | `know-your-lease/prod/voyage-api-key` | `arn:aws:secretsmanager:ca-central-1:297784246437:secret:know-your-lease/prod/voyage-api-key-sA4kXX` | `ca-central-1` | Voyage AI embeddings key; readable by `kyl-api-execution` and `kyl-worker-execution` only | ~$0.40/month + negligible API-call cost | `aws secretsmanager delete-secret --secret-id know-your-lease/prod/voyage-api-key --force-delete-without-recovery` (force avoids continued billing through a recovery window) |
+| Secrets Manager secret | `know-your-lease/prod/gemini-api-key` | `arn:aws:secretsmanager:ca-central-1:297784246437:secret:know-your-lease/prod/gemini-api-key-8gTg9j` | `ca-central-1` | Gemini generation key; readable by `kyl-api-execution` only | ~$0.40/month + negligible API-call cost | `aws secretsmanager delete-secret --secret-id know-your-lease/prod/gemini-api-key --force-delete-without-recovery` |
+| IAM role (execution) | `kyl-api-execution` | `arn:aws:iam::297784246437:role/kyl-api-execution` | `ca-central-1` (IAM is global) | ECS execution role: `AmazonECSTaskExecutionRolePolicy` + inline `KnowYourLeaseApiSecrets` (Voyage, Gemini, and a not-yet-created `database-url-app` by name prefix) | No fixed charge | Delete inline policy, detach managed policy, then `aws iam delete-role --role-name kyl-api-execution` |
+| IAM role (execution) | `kyl-worker-execution` | `arn:aws:iam::297784246437:role/kyl-worker-execution` | `ca-central-1` (IAM is global) | ECS execution role: `AmazonECSTaskExecutionRolePolicy` + inline `KnowYourLeaseWorkerSecrets` (Voyage and a not-yet-created `database-url-app`; no Gemini) | No fixed charge | Delete inline policy, detach managed policy, then `aws iam delete-role --role-name kyl-worker-execution` |
+| IAM role (execution) | `kyl-migration-execution` | `arn:aws:iam::297784246437:role/kyl-migration-execution` | `ca-central-1` (IAM is global) | ECS execution role: `AmazonECSTaskExecutionRolePolicy` + inline `KnowYourLeaseMigrationSecrets` (references a not-yet-created `database-url-migrate`; grants nothing today) | No fixed charge | Delete inline policy, detach managed policy, then `aws iam delete-role --role-name kyl-migration-execution` |
+| IAM role (task) | `kyl-api-task` | `arn:aws:iam::297784246437:role/kyl-api-task` | `ca-central-1` (IAM is global) | Application role for the API container: inline `KnowYourLeaseApiDataAccess` grants `s3:GetObject`/`PutObject`/`DeleteObject` on `uploads/*` only and `sqs:SendMessage` on the main queue only; no ListBucket, no Receive, no DLQ | No fixed charge | Delete inline policy, then `aws iam delete-role --role-name kyl-api-task` |
+| IAM role (task) | `kyl-worker-task` | `arn:aws:iam::297784246437:role/kyl-worker-task` | `ca-central-1` (IAM is global) | Application role for the worker container: inline `KnowYourLeaseWorkerDataAccess` grants `s3:GetObject` on `uploads/*` only and `sqs:ReceiveMessage`/`DeleteMessage` on the main queue only; no Put/Delete, no Send, no ChangeMessageVisibility, no DLQ | No fixed charge | Delete inline policy, then `aws iam delete-role --role-name kyl-worker-task` |
 
-## Required teardown order
+The migration workload has no task role at all: it makes no AWS API calls beyond
+what its execution role already grants (image pull, log write, its one secret).
+
+## Required teardown order (Phase 6C, before Phase 6B)
+
+Phase 6C resources sit above the Phase 6B data plane and must be removed first if
+the whole deployment is torn down. No Phase 6D/ECS resources exist to remove
+before this. In order:
+
+1. Detach the inline policy from and delete `kyl-api-task`, then `kyl-worker-task`:
+
+   ```bash
+   aws iam delete-role-policy --role-name kyl-api-task --policy-name KnowYourLeaseApiDataAccess
+   aws iam delete-role --role-name kyl-api-task
+   aws iam delete-role-policy --role-name kyl-worker-task --policy-name KnowYourLeaseWorkerDataAccess
+   aws iam delete-role --role-name kyl-worker-task
+   ```
+
+2. Delete the inline policy and detach the managed policy from each execution
+   role, then delete the role:
+
+   ```bash
+   for role in kyl-api-execution kyl-worker-execution kyl-migration-execution; do
+     policy_name=$(aws iam list-role-policies --role-name "$role" --query 'PolicyNames[0]' --output text)
+     aws iam delete-role-policy --role-name "$role" --policy-name "$policy_name"
+     aws iam detach-role-policy --role-name "$role" --policy-arn arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy
+     aws iam delete-role --role-name "$role"
+   done
+   ```
+
+3. Force-delete both application secrets so recovery-window billing does not
+   continue after teardown:
+
+   ```bash
+   aws secretsmanager delete-secret --secret-id know-your-lease/prod/voyage-api-key --force-delete-without-recovery
+   aws secretsmanager delete-secret --secret-id know-your-lease/prod/gemini-api-key --force-delete-without-recovery
+   ```
+
+4. Delete any images, then the ECR repository:
+
+   ```bash
+   aws ecr delete-repository --repository-name know-your-lease-backend --force
+   ```
+
+5. Delete the Cognito domain, then the app client, then the user pool, in that
+   exact order (the pool cannot be deleted while a domain is attached):
+
+   ```bash
+   aws cognito-idp delete-user-pool-domain --user-pool-id ca-central-1_Lhw9u8Yh6 --domain know-your-lease-prod
+   aws cognito-idp delete-user-pool-client --user-pool-id ca-central-1_Lhw9u8Yh6 --client-id 4sq1r3l1flfv1acrkrqc69aoh9
+   aws cognito-idp update-user-pool --user-pool-id ca-central-1_Lhw9u8Yh6 --deletion-protection INACTIVE
+   aws cognito-idp delete-user-pool --user-pool-id ca-central-1_Lhw9u8Yh6
+   ```
+
+6. Last of all: delete `kyl-deployer`'s access key, delete its login profile,
+   detach `KnowYourLeaseDeployerPolicy`, delete the user, then delete the policy.
+   Do this only after every resource above is gone -- deleting the deployer first
+   removes the only non-root path capable of the earlier steps.
+
+   ```bash
+   aws iam list-access-keys --user-name kyl-deployer   # get the key id, then:
+   aws iam delete-access-key --user-name kyl-deployer --access-key-id <id-from-above>
+   aws iam delete-login-profile --user-name kyl-deployer
+   aws iam detach-user-policy --user-name kyl-deployer --policy-arn arn:aws:iam::297784246437:policy/KnowYourLeaseDeployerPolicy
+   aws iam delete-user --user-name kyl-deployer
+   aws iam delete-policy --policy-arn arn:aws:iam::297784246437:policy/KnowYourLeaseDeployerPolicy
+   ```
+
+   The last two steps must run as root (or from another admin identity), since
+   `kyl-deployer` is deleting itself. Root console access is retained specifically
+   for this kind of break-glass step.
+
+## Required teardown order (Phase 6B)
 
 Later phases may add application services that must be removed before these data
 plane resources. For the Phase 6B resources, use this dependency order:
@@ -165,8 +260,8 @@ every ID against this inventory and the three project tags first.
   endpoint. Subnet-level public-IP auto-assignment remains off; later ECS task
   definitions must explicitly use `assignPublicIp=ENABLED`.
 - DB subnets use `rtb-01443693daaf9476c`, which contains only the local VPC route.
-- No NAT gateway, Elastic IP, EC2 instance, ALB, ECS cluster, or ECR repository
-  was created for this project.
+- No NAT gateway, Elastic IP, EC2 instance, ALB, or ECS cluster was created for
+  this project. (An ECR repository was created in Phase 6C -- see below.)
 - RDS is private, Single-AZ, encrypted, deletion-protected, and attached only to
   `sg-0da4b34da87742d35`. The PostgreSQL 18 default parameter group reports
   `rds.force_ssl=1`.
@@ -178,6 +273,67 @@ every ID against this inventory and the three project tags first.
 - Both SQS queues are empty and use SQS-managed encryption. The main queue uses
   900-second visibility, 20-second long polling, four-day retention, and redrives
   to the 14-day DLQ after five receives.
+
+## Verified Phase 6C state
+
+All of the following were confirmed live with `describe-*`/`get-*`/`simulate-principal-policy`
+calls, not assumed from creation parameters:
+
+- `aws sts get-caller-identity --profile kyl-deploy` returns
+  `arn:aws:iam::297784246437:user/kyl-deployer`, not root.
+- Root: `AccountAccessKeysPresent=0` (still no root access keys), root has a
+  console login profile with a password reset required and no MFA enrolled at
+  the end of this session -- see [aws-identity.md](aws-identity.md) for the
+  outstanding manual step.
+- The account remains `accountPlanType=FREE`, `accountPlanStatus=ACTIVE`, with
+  `$120.00 USD` remaining credit, both before and after all Phase 6C creates.
+- The account is still not a member of an AWS Organization (verified via root,
+  since `kyl-deployer`'s policy denies all `organizations:*` actions including
+  the read-only describe call -- this is the guardrail working as intended, not
+  a gap).
+- Cognito pool `ca-central-1_Lhw9u8Yh6`: `UserPoolTier=LITE`,
+  `UserPoolAddOns.AdvancedSecurityMode=OFF`, `MfaConfiguration=OPTIONAL` with
+  `SoftwareTokenMfaConfiguration.Enabled=true` and no SMS configuration.
+- App client `4sq1r3l1flfv1acrkrqc69aoh9`: no `ClientSecret` field in the create
+  response, `AllowedOAuthFlows=["code"]` only (no `implicit`),
+  `AllowedOAuthScopes=["openid","email"]`,
+  `SupportedIdentityProviders=["COGNITO"]`, access/ID token validity 60 minutes,
+  refresh token validity 30 days.
+- Domain `know-your-lease-prod`: `Status=ACTIVE`, `ManagedLoginVersion=1`. The
+  JWKS endpoint
+  (`https://cognito-idp.ca-central-1.amazonaws.com/ca-central-1_Lhw9u8Yh6/.well-known/jwks.json`)
+  returned HTTP 200; the OIDC discovery document's `issuer` and `jwks_uri` match
+  what `backend/app/core/config.py`'s `cognito_issuer_url`/`cognito_jwks_url`
+  derive from `COGNITO_REGION`/`COGNITO_USER_POOL_ID`; the Hosted UI login page
+  returned HTTP 200.
+- ECR repository: `imageTagMutability=IMMUTABLE`, `encryptionType=AES256`,
+  `scanOnPush=true` (basic scanning; Inspector/enhanced scanning was never
+  enabled), zero images. `docker login` against the registry succeeded via
+  `kyl-deployer` and the credential was removed immediately after (no image
+  pushed).
+- Both secrets (`voyage-api-key`, `gemini-api-key`) confirmed present via
+  `describe-secret` (metadata only); `get-secret-value` was never called during
+  verification and no value was displayed, logged, or written anywhere in this
+  repository.
+- IAM policy simulation (`iam:SimulatePrincipalPolicy`), 17 cases, all matched
+  intent: `kyl-api-task` can `PutObject`/`GetObject`/`DeleteObject` on
+  `uploads/*` and `SendMessage` on the main queue; `kyl-worker-task` can
+  `GetObject` on `uploads/*` and `ReceiveMessage`/`DeleteMessage` on the main
+  queue. Both are denied the other's write/receive actions, `ListBucket`,
+  `ChangeMessageVisibility`, `SendMessage` to the DLQ, and any DLQ access at all.
+- A second simulation set confirmed `kyl-api-execution` and `kyl-worker-execution`
+  can read `voyage-api-key`; only `kyl-api-execution` can read `gemini-api-key`;
+  `kyl-migration-execution` can read neither; and none of the three roles can
+  read the RDS-managed master secret.
+- No role or policy created in Phase 6C contains `s3:*`, `sqs:*`,
+  `secretsmanager:*`, or an attached `AdministratorAccess` policy (checked by
+  reading every inline policy document back and every attached managed policy
+  list, not by inspection of the source JSON alone).
+- No task role exists for the migration workload
+  (`aws iam get-role --role-name kyl-migration-task` returns `NoSuchEntity`).
+- No CloudWatch log group exists under `/ecs/know-your-lease` (Phase 6D's job).
+- No static `AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY` appears anywhere in
+  `backend/.env`, either `.env.example`, or `docker-compose.yml`.
 
 ## Pgvector readiness
 
@@ -200,3 +356,24 @@ No NAT Gateway, ALB, Fargate task, public IPv4 allocation, provisioned IOPS,
 Performance Insights, or enhanced RDS monitoring is active. The VPC, subnets,
 route tables, Internet Gateway, security groups, and S3 Gateway endpoint have no
 fixed hourly charge; empty S3/SQS usage is negligible.
+
+### Phase 6C incremental cost
+
+Live AWS Price List data for Canada Central: Secrets Manager `$0.40/secret-month`
+plus `$0.05/10,000 API requests`; Cognito Lite tier `$0.0055/MAU`; ECR
+`$0.10/GB-month` (storage only, billed from the first pushed image); IAM has no
+charge at any usage level.
+
+| Item | Monthly | Daily |
+| --- | ---: | ---: |
+| 2 secrets (`voyage-api-key`, `gemini-api-key`) | $0.80 | $0.026 |
+| Cognito (portfolio-scale MAU, Lite tier) | < $0.03 | < $0.001 |
+| ECR (repository empty, no image pushed) | $0.00 | $0.00 |
+| IAM (5 roles, 1 policy, 1 user) | $0.00 | $0.00 |
+| **Phase 6C total** | **≈ $0.83** | **≈ $0.028** |
+| Phase 6B total (unchanged) | $16.08 | $0.53 |
+| **Running total** | **≈ $16.91** | **≈ $0.56** |
+
+This is list price before tax; the Free plan's remaining $120.00 credit absorbs
+it, and the account's payable amount was confirmed at $0 both before and after
+Phase 6C. ECR storage becomes billable once Phase 6D or later pushes an image.

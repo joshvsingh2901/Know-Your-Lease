@@ -1,9 +1,12 @@
 # AWS Deployment Preparation
 
 Phase 6 targets an AWS production runtime. Phase 6A prepared repository
-configuration, and Phase 6B provisioned the network/data-plane foundation recorded
-in [the resource inventory](aws-resource-inventory.md). No image has been pushed to
-ECR and no application or Vercel deployment has occurred.
+configuration, Phase 6B provisioned the network/data-plane foundation, and Phase 6C
+provisioned a non-root deployment identity, a live Cognito user pool, a private ECR
+repository, two application secrets, and the ECS execution/task IAM roles -- all
+recorded in [the resource inventory](aws-resource-inventory.md) and
+[the identity runbook](aws-identity.md). No image has been pushed to ECR, no ECS
+cluster/service/task exists, and no application or Vercel deployment has occurred.
 
 ## Approved target
 
@@ -69,26 +72,26 @@ Non-secret environment:
 ENVIRONMENT=production
 PORT=8000
 DOCUMENT_STORAGE_BACKEND=s3
-S3_BUCKET_NAME=<private-pdf-bucket>
+S3_BUCKET_NAME=know-your-lease-prod-297784246437-ca-central-1
 AWS_REGION=ca-central-1
 INGESTION_MODE=sqs
-SQS_INGESTION_QUEUE_URL=<main-ingestion-queue-url>
+SQS_INGESTION_QUEUE_URL=https://sqs.ca-central-1.amazonaws.com/297784246437/know-your-lease-ingestion-prod
 INGESTION_PROCESSING_TIMEOUT_SECONDS=900
 AUTH_MODE=cognito
 COGNITO_REGION=ca-central-1
-COGNITO_USER_POOL_ID=<user-pool-id>
-COGNITO_APP_CLIENT_ID=<public-app-client-id>
+COGNITO_USER_POOL_ID=ca-central-1_Lhw9u8Yh6
+COGNITO_APP_CLIENT_ID=4sq1r3l1flfv1acrkrqc69aoh9
 FRONTEND_ORIGIN=https://<vercel-production-domain>
 DEBUG_ENDPOINTS_ENABLED=false
 ANSWER_CACHE_VERSION=v1
 ```
 
-Secrets Manager values:
+Secrets Manager values (execution role: `kyl-api-execution`):
 
 ```dotenv
-DATABASE_URL=<runtime-postgresql-url>
-VOYAGE_API_KEY=<secret>
-GEMINI_API_KEY=<secret>
+DATABASE_URL=<runtime-postgresql-url>          # created in Phase 6D: know-your-lease/prod/database-url-app
+VOYAGE_API_KEY=<secret>                        # know-your-lease/prod/voyage-api-key (created Phase 6C)
+GEMINI_API_KEY=<secret>                        # know-your-lease/prod/gemini-api-key (created Phase 6C)
 ```
 
 The API needs Voyage to embed questions and Gemini to generate grounded answers.
@@ -102,18 +105,18 @@ Non-secret environment:
 ```dotenv
 ENVIRONMENT=production
 DOCUMENT_STORAGE_BACKEND=s3
-S3_BUCKET_NAME=<private-pdf-bucket>
+S3_BUCKET_NAME=know-your-lease-prod-297784246437-ca-central-1
 AWS_REGION=ca-central-1
 INGESTION_MODE=sqs
-SQS_INGESTION_QUEUE_URL=<main-ingestion-queue-url>
+SQS_INGESTION_QUEUE_URL=https://sqs.ca-central-1.amazonaws.com/297784246437/know-your-lease-ingestion-prod
 INGESTION_PROCESSING_TIMEOUT_SECONDS=900
 ```
 
-Secrets Manager values:
+Secrets Manager values (execution role: `kyl-worker-execution`):
 
 ```dotenv
-DATABASE_URL=<runtime-postgresql-url>
-VOYAGE_API_KEY=<secret>
+DATABASE_URL=<runtime-postgresql-url>          # created in Phase 6D: know-your-lease/prod/database-url-app
+VOYAGE_API_KEY=<secret>                        # know-your-lease/prod/voyage-api-key (created Phase 6C, shared with API)
 ```
 
 Chunking, embedding-model, batching, pacing, and retry settings currently have
@@ -129,11 +132,16 @@ printing secret values.
 
 ### Migration task
 
-The migration task receives only this Secrets Manager value:
+The migration task receives only this Secrets Manager value (execution role:
+`kyl-migration-execution`):
 
 ```dotenv
-DATABASE_URL=<migration-postgresql-url>
+DATABASE_URL=<migration-postgresql-url>        # created in Phase 6D: know-your-lease/prod/database-url-migrate
 ```
+
+The migration task runs with no application task role at all -- it makes no AWS
+API calls beyond what its execution role already grants (image pull, log write,
+this one secret).
 
 `alembic upgrade head` imports SQLAlchemy metadata but does not import the FastAPI
 application. It therefore does not require S3, SQS, Cognito, frontend, Voyage, or
@@ -145,12 +153,20 @@ These are public build-time configuration, not secrets:
 
 ```dotenv
 NEXT_PUBLIC_API_BASE_URL=https://api.<domain>
-NEXT_PUBLIC_COGNITO_DOMAIN=https://<domain>.auth.ca-central-1.amazoncognito.com
-NEXT_PUBLIC_COGNITO_APP_CLIENT_ID=<public-app-client-id>
+NEXT_PUBLIC_COGNITO_DOMAIN=https://know-your-lease-prod.auth.ca-central-1.amazoncognito.com
+NEXT_PUBLIC_COGNITO_APP_CLIENT_ID=4sq1r3l1flfv1acrkrqc69aoh9
 NEXT_PUBLIC_COGNITO_REDIRECT_URI=https://<vercel-production-domain>/auth/callback
 ```
 
-The Cognito app client must be public and have no client secret.
+The Cognito app client (`know-your-lease-web`) is public and has no client secret
+(verified: `create-user-pool-client` returned no `ClientSecret` field). Its callback
+and logout URLs are currently `http://localhost:3000/auth/callback` and
+`http://localhost:3000/` only, because the Vercel production hostname does not
+exist yet. Phase 6E must retrieve the client's full current configuration with
+`describe-user-pool-client` and re-send every field via `update-user-pool-client`
+with the Vercel URLs *appended* to the existing localhost ones -- that API replaces
+the entire client configuration, so sending only the new URLs would silently erase
+the localhost ones local development still needs.
 
 ## Secret and non-secret ownership
 
@@ -176,9 +192,18 @@ task execution roles.
 
 Phase 6B created the VPC, four subnets, Internet Gateway, route tables, security
 groups, S3 Gateway endpoint, private RDS instance and RDS-managed master secret,
-private S3 bucket, and SQS/DLQ. It did not create an ALB, ECS cluster/service, ECR
-repository, Cognito pool, application IAM role, application secret, DNS resource,
-or Vercel deployment. Phase 6C has not started.
+private S3 bucket, and SQS/DLQ.
+
+Phase 6C created a non-root deployment identity (`kyl-deployer`, see
+[docs/aws-identity.md](aws-identity.md)), a live Cognito user pool and public app
+client, a Cognito Hosted UI domain, a private ECR repository (empty), the
+`voyage-api-key` and `gemini-api-key` application secrets, three ECS execution
+roles, and two ECS application task roles.
+
+Phase 6C did **not** create: an ALB, an ECS cluster/service/task, a pushed
+container image, the `database-url-app`/`database-url-migrate` secrets (these
+require PostgreSQL roles that do not exist until an in-VPC task creates them in
+Phase 6D), CloudWatch log groups, a DNS resource, or a Vercel deployment.
 
 ## Phase 6B live-account deviation
 
@@ -187,3 +212,13 @@ before creating an instance. The temporary portfolio instance uses one-day
 retention instead. Deletion protection remains enabled, and teardown requires an
 explicit final-snapshot decision. No other approved RDS sizing or security setting
 is changed by this account constraint.
+
+## Phase 6C live-account deviation
+
+`CreateUserPool` rejects `MfaConfiguration=OPTIONAL` (or `ON`) unless SMS/SNS is
+also configured, even when the only enabled MFA method is a software token. The
+pool was created with `MfaConfiguration=OFF`, then `set-user-pool-mfa-config` was
+called separately with `MfaConfiguration=OPTIONAL` and
+`SoftwareTokenMfaConfiguration.Enabled=true`. The result is optional TOTP-only
+MFA with no SMS/SNS role and no per-message SMS cost -- functionally what was
+requested, reached in two API calls instead of one.
