@@ -5,8 +5,9 @@ configuration, Phase 6B provisioned the network/data-plane foundation, and Phase
 provisioned a non-root deployment identity, a live Cognito user pool, a private ECR
 repository, two application secrets, and the ECS execution/task IAM roles -- all
 recorded in [the resource inventory](aws-resource-inventory.md) and
-[the identity runbook](aws-identity.md). No image has been pushed to ECR, no ECS
-cluster/service/task exists, and no application or Vercel deployment has occurred.
+[the identity runbook](aws-identity.md). Phase 6D deployed the image, database
+migrations, API, and worker. Phase 6E added trusted HTTPS and DNS, deployed the
+Vercel frontend, and configured the live Cognito/CORS origins.
 
 ## Approved target
 
@@ -81,7 +82,7 @@ AUTH_MODE=cognito
 COGNITO_REGION=ca-central-1
 COGNITO_USER_POOL_ID=ca-central-1_Lhw9u8Yh6
 COGNITO_APP_CLIENT_ID=4sq1r3l1flfv1acrkrqc69aoh9
-FRONTEND_ORIGIN=https://<vercel-production-domain>
+FRONTEND_ORIGIN=https://know-your-lease-tawny.vercel.app
 DEBUG_ENDPOINTS_ENABLED=false
 ANSWER_CACHE_VERSION=v1
 ```
@@ -152,21 +153,18 @@ Gemini configuration. Migrations remain separate from API startup.
 These are public build-time configuration, not secrets:
 
 ```dotenv
-NEXT_PUBLIC_API_BASE_URL=https://api.<domain>
+NEXT_PUBLIC_API_BASE_URL=https://api.joshveer.ca
 NEXT_PUBLIC_COGNITO_DOMAIN=https://know-your-lease-prod.auth.ca-central-1.amazoncognito.com
 NEXT_PUBLIC_COGNITO_APP_CLIENT_ID=4sq1r3l1flfv1acrkrqc69aoh9
-NEXT_PUBLIC_COGNITO_REDIRECT_URI=https://<vercel-production-domain>/auth/callback
+NEXT_PUBLIC_COGNITO_REDIRECT_URI=https://know-your-lease-tawny.vercel.app/auth/callback
 ```
 
-The Cognito app client (`know-your-lease-web`) is public and has no client secret
-(verified: `create-user-pool-client` returned no `ClientSecret` field). Its callback
-and logout URLs are currently `http://localhost:3000/auth/callback` and
-`http://localhost:3000/` only, because the Vercel production hostname does not
-exist yet. Phase 6E must retrieve the client's full current configuration with
-`describe-user-pool-client` and re-send every field via `update-user-pool-client`
-with the Vercel URLs *appended* to the existing localhost ones -- that API replaces
-the entire client configuration, so sending only the new URLs would silently erase
-the localhost ones local development still needs.
+The Cognito app client (`know-your-lease-web`) is public and has no client secret.
+It preserves the localhost callback/logout URLs and also accepts exactly
+`https://know-your-lease-tawny.vercel.app/auth/callback` and
+`https://know-your-lease-tawny.vercel.app/`; there are no wildcards. Authorization
+Code, PKCE, `openid email`, token lifetimes, revocation, and user-enumeration
+protection were preserved during the Phase 6E update.
 
 ## Secret and non-secret ownership
 

@@ -15,7 +15,7 @@ secret material here.
 | Environment tag | `Environment=production` |
 | Temporary tag | `TemporaryDeployment=true` |
 | Intended lifetime | Approximately three days for portfolio validation |
-| Provisioning status | Phase 6B and 6C complete; resources retained for later phases |
+| Provisioning status | Phase 6E HTTPS/Vercel integration and authenticated synthetic-PDF validation live; TCP/80 security-group cleanup and Vercel GitHub App linkage remain |
 | Routine CLI identity | `arn:aws:iam::297784246437:user/kyl-deployer` (profile `kyl-deploy`), as of Phase 6C -- see [aws-identity.md](aws-identity.md) |
 
 ## Live account constraints and deviations
@@ -71,7 +71,7 @@ Resource rows were added immediately after each successful create operation.
 | IAM customer-managed policy | `KnowYourLeaseDeployerPolicy` | `arn:aws:iam::297784246437:policy/KnowYourLeaseDeployerPolicy` | `ca-central-1` (IAM is global) | Scoped admin policy for the temporary deployment identity; explicit Deny on `freetier:UpgradeAccountPlan`, `organizations:*`, new IAM users/access keys, and self-lockout on `kyl-deployer` | No fixed charge | Detach from `kyl-deployer` last, then `aws iam delete-policy --policy-arn arn:aws:iam::297784246437:policy/KnowYourLeaseDeployerPolicy` |
 | IAM user | `kyl-deployer` | `arn:aws:iam::297784246437:user/kyl-deployer` | `ca-central-1` (IAM is global) | Non-root deployment identity; console login profile exists (password-reset-required, unused this session) and one access key exists for the `kyl-deploy` CLI profile; no `AdministratorAccess` | No fixed charge | Last of all Phase 6C resources: delete the access key, delete the login profile, detach `KnowYourLeaseDeployerPolicy`, then `aws iam delete-user --user-name kyl-deployer` |
 | Cognito user pool | `know-your-lease-prod` | `ca-central-1_Lhw9u8Yh6` | `ca-central-1` | LITE tier, email sign-in/verification, self-signup, optional TOTP MFA, advanced security OFF, deletion protection ACTIVE | Per-MAU only (~$0.0055/MAU at LITE, verified live price list) | First disable protection: `aws cognito-idp update-user-pool --user-pool-id ca-central-1_Lhw9u8Yh6 --deletion-protection INACTIVE`; delete domain and client first (see below), then `aws cognito-idp delete-user-pool --user-pool-id ca-central-1_Lhw9u8Yh6` |
-| Cognito app client | `know-your-lease-web` | `4sq1r3l1flfv1acrkrqc69aoh9` (pool `ca-central-1_Lhw9u8Yh6`) | `ca-central-1` | Public SPA client, no secret, Authorization Code + PKCE only, scopes `openid email`, callbacks `http://localhost:3000/auth/callback`/`http://localhost:3000/` | No separate charge | `aws cognito-idp delete-user-pool-client --user-pool-id ca-central-1_Lhw9u8Yh6 --client-id 4sq1r3l1flfv1acrkrqc69aoh9` |
+| Cognito app client | `know-your-lease-web` | `4sq1r3l1flfv1acrkrqc69aoh9` (pool `ca-central-1_Lhw9u8Yh6`) | `ca-central-1` | Public SPA client, no secret, Authorization Code + PKCE only, scopes `openid email`; localhost URLs preserved and exact production callback/logout URLs added for `https://know-your-lease-tawny.vercel.app` | No separate charge | `aws cognito-idp delete-user-pool-client --user-pool-id ca-central-1_Lhw9u8Yh6 --client-id 4sq1r3l1flfv1acrkrqc69aoh9` |
 | Cognito Hosted UI domain | `know-your-lease-prod` | Domain prefix on pool `ca-central-1_Lhw9u8Yh6`; CloudFront `dq9dozspu8y40.cloudfront.net` | `ca-central-1` | Classic managed login (v1) Hosted UI; verified reachable (login page HTTP 200, JWKS HTTP 200) | No separate charge | Must be deleted before the pool: `aws cognito-idp delete-user-pool-domain --user-pool-id ca-central-1_Lhw9u8Yh6 --domain know-your-lease-prod` |
 | ECR repository | `know-your-lease-backend` | `arn:aws:ecr:ca-central-1:297784246437:repository/know-your-lease-backend` | `ca-central-1` | Private, AES-256, immutable tags, basic scan-on-push, empty (no image pushed); lifecycle policy expires untagged images after 7 days and caps tagged images at 10 | $0 while empty; ~$0.10/GB-month once images exist | `aws ecr delete-repository --repository-name know-your-lease-backend --force` (force removes any images with it) |
 | Secrets Manager secret | `know-your-lease/prod/voyage-api-key` | `arn:aws:secretsmanager:ca-central-1:297784246437:secret:know-your-lease/prod/voyage-api-key-sA4kXX` | `ca-central-1` | Voyage AI embeddings key; readable by `kyl-api-execution` and `kyl-worker-execution` only | ~$0.40/month + negligible API-call cost | `aws secretsmanager delete-secret --secret-id know-your-lease/prod/voyage-api-key --force-delete-without-recovery` (force avoids continued billing through a recovery window) |
@@ -99,13 +99,15 @@ what its execution role already grants (image pull, log write, its one secret).
 | CloudWatch log group | `/ecs/know-your-lease/bootstrap` | same | `ca-central-1` | One-off DB bootstrap task logs, 7-day retention | Usage-based, negligible | `aws logs delete-log-group --log-group-name /ecs/know-your-lease/bootstrap` |
 | Secrets Manager secret | `know-your-lease/prod/database-url-app` | `arn:aws:secretsmanager:ca-central-1:297784246437:secret:know-your-lease/prod/database-url-app-FsTQ8V` | `ca-central-1` | `kyl_app` connection string (DML only, no DDL); readable by `kyl-api-execution` and `kyl-worker-execution` only | ~$0.40/month | `aws secretsmanager delete-secret --secret-id know-your-lease/prod/database-url-app --force-delete-without-recovery` |
 | Secrets Manager secret | `know-your-lease/prod/database-url-migrate` | `arn:aws:secretsmanager:ca-central-1:297784246437:secret:know-your-lease/prod/database-url-migrate-6odMAo` | `ca-central-1` | `kyl_migrate` connection string (schema owner); readable by `kyl-migration-execution` only | ~$0.40/month | `aws secretsmanager delete-secret --secret-id know-your-lease/prod/database-url-migrate --force-delete-without-recovery` |
-| ECS task definition | `know-your-lease-api` | family, revisions 1-2 (identical `image` digest; revision 2 exists only to carry the canonical `9340c4d` tag reference forward) | `ca-central-1` | API container spec: execution `kyl-api-execution`, task `kyl-api-task`, port 8000. **The running service is still on revision 1** -- see the known limitation below | No fixed charge | `aws ecs deregister-task-definition --task-definition know-your-lease-api:1` (and `:2`) |
+| ECS task definition | `know-your-lease-api` | family, revisions 1-3; revision 3 retains the canonical image and sets `FRONTEND_ORIGIN=https://know-your-lease-tawny.vercel.app` | `ca-central-1` | API container spec: execution `kyl-api-execution`, task `kyl-api-task`, port 8000. Service runs revision 3, rollout completed, one healthy target | No fixed charge | `aws ecs deregister-task-definition --task-definition know-your-lease-api:<1\|2\|3>` |
 | ECS task definition | `know-your-lease-worker` | family, revisions 1-2 (identical `image` digest) | `ca-central-1` | Worker container spec: execution `kyl-worker-execution`, task `kyl-worker-task`, no ports. Service updated to revision 2 and confirmed stable | No fixed charge | `aws ecs deregister-task-definition --task-definition know-your-lease-worker:1` (and `:2`) |
 | ECS task definition | `know-your-lease-migration` | family, revision 1 | `ca-central-1` | One-off `alembic upgrade head`; execution `kyl-migration-execution`; **no task role** | No fixed charge | `aws ecs deregister-task-definition --task-definition know-your-lease-migration:1` |
 | ECS task definition | `know-your-lease-bootstrap` | family, revisions 1-3 | `ca-central-1` | One-off DB role bootstrap; revisions 1-2 used a now-deleted bootstrap execution/task role pair and failed (see Bootstrap notes below); revision 3 succeeded | No fixed charge | `aws ecs deregister-task-definition --task-definition know-your-lease-bootstrap:<1\|2\|3>` |
 | ECS service | `know-your-lease-api` | `arn:aws:ecs:ca-central-1:297784246437:service/know-your-lease-prod/know-your-lease-api` | `ca-central-1` | `desiredCount=1`, both public subnets, `api-sg`, registered to the ALB target group, circuit breaker + rollback enabled | Fargate task-hours (below) | `aws ecs update-service --cluster know-your-lease-prod --service know-your-lease-api --desired-count 0` then `aws ecs delete-service --cluster know-your-lease-prod --service know-your-lease-api --force` |
 | ECS service | `know-your-lease-worker` | `arn:aws:ecs:ca-central-1:297784246437:service/know-your-lease-prod/know-your-lease-worker` | `ca-central-1` | `desiredCount=1`, both public subnets, `worker-sg`, no load balancer, circuit breaker + rollback enabled | Fargate task-hours (below) | Same pattern with `--service know-your-lease-worker` |
-| ALB | `know-your-lease-prod` | `arn:aws:elasticloadbalancing:ca-central-1:297784246437:loadbalancer/app/know-your-lease-prod/27257d9bb115ef1a` | `ca-central-1` | Internet-facing, both public subnets, `alb-sg`; **no listener currently attached** (see below) | ~$0.024/hour + 2 public IPv4 addresses (kept per the approved Phase 6D/6E boundary) | `aws elbv2 delete-load-balancer --load-balancer-arn <arn>` (after the target group is free of the API service) |
+| ACM certificate | `api.joshveer.ca` | `arn:aws:acm:ca-central-1:297784246437:certificate/0c8b3293-80a9-4899-ba97-c86a4caca420` | `ca-central-1` | DNS-validated public certificate, status `ISSUED` | No additional charge while used with the ALB | Delete only after the HTTPS listener: `aws acm delete-certificate --certificate-arn <arn>` |
+| ALB | `know-your-lease-prod` | `arn:aws:elasticloadbalancing:ca-central-1:297784246437:loadbalancer/app/know-your-lease-prod/27257d9bb115ef1a` | `ca-central-1` | Internet-facing, both public subnets, `alb-sg`; serves only HTTPS:443 through the listener below | ~$0.024/hour + 2 public IPv4 addresses | `aws elbv2 delete-load-balancer --load-balancer-arn <arn>` (after the listener and API service dependency are removed) |
+| ALB HTTPS listener | `443` | `arn:aws:elasticloadbalancing:ca-central-1:297784246437:listener/app/know-your-lease-prod/27257d9bb115ef1a/e61fe8705af57984` | `ca-central-1` | TLS policy `ELBSecurityPolicy-TLS13-1-2-Res-2021-06`, ACM certificate for `api.joshveer.ca`, forwards to the existing API target group; no HTTP listener exists | Included with ALB usage | `aws elbv2 delete-listener --listener-arn <arn>` |
 | ALB target group | `know-your-lease-api` | `arn:aws:elasticloadbalancing:ca-central-1:297784246437:targetgroup/know-your-lease-api/4f709e08df7301ae` | `ca-central-1` | `ip` target type, HTTP:8000, health check `GET /health`, `deregistration_delay=30s`; currently one healthy target (the API task) | No separate charge | `aws elbv2 delete-target-group --target-group-arn <arn>` (after the API service stops using it) |
 
 **Temporary bootstrap IAM (created and deleted within this same session):**
@@ -134,9 +136,10 @@ master secret ARN returns `implicitDeny` for every one of them.
    aws ecs delete-service --cluster know-your-lease-prod --service know-your-lease-worker --force
    ```
 
-2. Delete the target group (no listener exists to block this):
+2. Delete the HTTPS listener, then delete the target group:
 
    ```bash
+   aws elbv2 delete-listener --listener-arn arn:aws:elasticloadbalancing:ca-central-1:297784246437:listener/app/know-your-lease-prod/27257d9bb115ef1a/e61fe8705af57984
    aws elbv2 delete-target-group --target-group-arn arn:aws:elasticloadbalancing:ca-central-1:297784246437:targetgroup/know-your-lease-api/4f709e08df7301ae
    ```
 
@@ -146,7 +149,8 @@ master secret ARN returns `implicitDeny` for every one of them.
    aws elbv2 delete-load-balancer --load-balancer-arn arn:aws:elasticloadbalancing:ca-central-1:297784246437:loadbalancer/app/know-your-lease-prod/27257d9bb115ef1a
    ```
 
-4. Deregister every task-definition revision (API, worker, migration, and all
+4. Delete the ACM certificate after the listener, then deregister every
+   task-definition revision (API, worker, migration, and all
    three bootstrap revisions).
 
 5. Force-delete both database-url secrets so no recovery-window billing
@@ -539,6 +543,46 @@ creation parameters:
   already-documented ~$2.51/day running burn -- not new spend from this
   session's IAM/image-tag changes, which carry no cost of their own).
 
+## Verified Phase 6E Parts B-C state
+
+- `api.joshveer.ca` resolves to the existing ALB and serves a trusted ACM
+  certificate. The only listener is HTTPS:443 with
+  `ELBSecurityPolicy-TLS13-1-2-Res-2021-06`; `GET /health` returns
+  `200 {"status":"ok"}` and unauthenticated `GET /documents` returns 401.
+- The Vercel Hobby project `know-your-lease`
+  (`prj_yHMBkPgJbheZB53f2YyCyGsg2j6f`) uses repository root `frontend` and is
+  live at `https://know-your-lease-tawny.vercel.app`. Its production environment
+  contains only the four documented public `NEXT_PUBLIC_*` values. The landing
+  page and existing frontend behavior were not redesigned for this deployment.
+- The Cognito public client preserves localhost and accepts only the exact
+  production callback `https://know-your-lease-tawny.vercel.app/auth/callback`
+  and logout URL `https://know-your-lease-tawny.vercel.app/`. Code flow, PKCE,
+  scopes `openid email`, token settings, and absence of a client secret are
+  unchanged.
+- API revision 3 changes only `FRONTEND_ORIGIN` from the reserved `.invalid`
+  placeholder to `https://know-your-lease-tawny.vercel.app`. The API rollout is
+  completed with one healthy target; the worker was not redeployed and remains
+  stable on revision 2.
+- Exact-origin CORS preflight succeeds and permits `Authorization`; an unrelated
+  origin receives a 400 preflight with no `Access-Control-Allow-Origin`. A real
+  Chrome session completed Cognito Authorization Code + PKCE login. The existing
+  frontend uploaded a generated synthetic lease, the worker brought it to `ready`,
+  and the PDF viewer restored and rendered it after refresh. Its PDF request used
+  HTTPS with a Bearer header and returned `200 application/pdf`; the token value
+  was never printed or exported.
+- The ALB security group still allows public TCP/80 with description
+  `HTTP-redirect-only`, but there is no HTTP listener. The precise revoke call is
+  denied because `kyl-deployer` lacks `ec2:RevokeSecurityGroupIngress`. The
+  minimum additional grant is that one action on
+  `arn:aws:ec2:ca-central-1:297784246437:security-group/sg-07d87eca20e784665`;
+  no broad EC2 administration is required.
+- Vercel automatic Git deployments remain pending because its GitHub App does
+  not yet have access to `joshvsingh2901/Know-Your-Lease`. The successful
+  production build was deployed with the Vercel CLI from the local `main`
+  checkout.
+- The account remained `FREE` / `ACTIVE`; no paid Vercel features or AWS plan
+  upgrade were enabled.
+
 ## Current list-price estimate
 
 AWS's live price list for Canada Central reports `db.t4g.micro` PostgreSQL
@@ -548,10 +592,12 @@ adds approximately `$0.013/day` or `$0.40/month`, for a Phase 6B list-price tota
 of approximately **$0.53/day or $16.08/month**, before tax, credits, backup excess,
 requests, or transfer. The account's Free plan/credits may reduce the billed total.
 
-No NAT Gateway, ALB, Fargate task, public IPv4 allocation, provisioned IOPS,
-Performance Insights, or enhanced RDS monitoring is active. The VPC, subnets,
-route tables, Internet Gateway, security groups, and S3 Gateway endpoint have no
-fixed hourly charge; empty S3/SQS usage is negligible.
+No NAT Gateway, provisioned IOPS, Performance Insights, or enhanced RDS monitoring
+is active. The ALB, two Fargate services, and their public IPv4 addresses are
+active and are included in the Phase 6D estimate below. The VPC, subnets, route
+tables, Internet Gateway, security groups, ACM public certificate, and S3 Gateway
+endpoint have no separate fixed hourly charge; low-volume S3/SQS usage is
+negligible.
 
 ### Phase 6C incremental cost
 
@@ -585,7 +631,7 @@ Live AWS Price List data for Canada Central: Fargate `$0.04456/vCPU-hour` and
 | API Fargate (0.25 vCPU + 1 GiB) | $0.384 |
 | Worker Fargate (0.25 vCPU + 1 GiB) | $0.384 |
 | 2 task public IPv4 addresses | $0.240 |
-| ALB hours (no listener attached; LCU usage ≈ $0) | $0.594 |
+| ALB hours (HTTPS listener; low-volume LCU usage ≈ $0) | $0.594 |
 | 2 ALB public IPv4 addresses (one per AZ) | $0.240 |
 | ECR storage (3 image tags, ~450 MB combined) | ~$0.002 |
 | 2 new secrets (`database-url-app`, `database-url-migrate`) | $0.026 |

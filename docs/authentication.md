@@ -7,9 +7,9 @@ application code. As of Phase 6C, a live Cognito user pool (`know-your-lease-pro
 `ca-central-1_Lhw9u8Yh6`) and public app client (`know-your-lease-web`) exist and
 were verified reachable -- see [docs/aws-identity.md](aws-identity.md) and
 [docs/aws-resource-inventory.md](aws-resource-inventory.md) for what was created
-and how to verify it independently. No ECS/Fargate service runs the API against
-that pool yet, and the app client's callback/logout URLs are `localhost` only
-until a Vercel hostname exists (Phase 6E).
+and how to verify it independently. The production ECS API now validates access
+tokens from that pool, and the public app client accepts both the preserved
+localhost URLs and the exact production Vercel callback/logout URLs.
 
 ## Cognito authentication flow
 
@@ -200,12 +200,12 @@ database can never have its documents silently reassigned to an arbitrary user. 
 later migration (not yet applied) can make `owner_id` `NOT NULL` once a given
 database's legacy rows have all been explicitly assigned.
 
-## Current limitations
+## Live verification and current limitations
 
-- A live Cognito user pool exists (Phase 6C), but no ECS/Fargate service runs the
-  backend against it yet, and its app client only accepts `localhost` callback/
-  logout URLs until a Vercel hostname exists (Phase 6E must append, not replace,
-  those URLs).
+- The production browser completed Cognito Authorization Code + PKCE login. A
+  generated synthetic lease was uploaded, processed, restored after refresh, and
+  rendered by the PDF viewer; its HTTPS PDF request carried a Bearer header and
+  returned `200 application/pdf`.
 - No re-ingestion endpoint or other producer advances a document past ingestion
   version 1; nothing in the current application requests a higher `ingestion_version`
   for an existing document.
@@ -215,6 +215,6 @@ database's legacy rows have all been explicitly assigned.
 - There is no document sharing, team/organization model, or admin/role system --
   ownership is strictly one document to exactly one user.
 - The `getAccessToken()` + `httpHeaders` path used by the PDF viewer
-  (`frontend/components/pdf-viewer-client.tsx`) has only been exercised locally with
-  `AUTH_MODE=disabled` (no token attached); its behavior against a real Cognito
-  access token has not been verified in a live browser against a real pool.
+  (`frontend/components/pdf-viewer-client.tsx`) is verified in a live production
+  browser against a real Cognito access token. The token value was never printed or
+  exported by the verification harness.
