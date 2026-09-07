@@ -276,3 +276,36 @@ the honest state is that the image running in AWS contains the
 not literally the tree at `<git-sha>`. A future commit that includes this code
 should re-tag/re-push under the resulting real SHA so the two stay
 truthfully linked.
+
+## Phase 6E Part A: traceability restored, one deferred limitation
+
+Phase 6D's commit (`9340c4d`) captured exactly the working tree that produced
+the `-fix2` image. Rebuilding `linux/amd64` from that committed SHA reproduced
+the **identical digest** (`sha256:da415a73...`) already running -- confirmed
+by direct comparison, not assumed. The image is now also tagged
+`9340c4da42134f4e5fda1dab43aa20fb55e11cdc` in ECR, so the tag deviation noted
+above is resolved: the canonical tag now matches the deployed commit.
+
+New task-definition revisions (`know-your-lease-api:2`,
+`know-your-lease-worker:2`) were registered pointing at that same digest, and
+the worker service was updated and confirmed stable. **The API service could
+not be updated** -- `ecs:UpdateService` fails with
+`InvalidParameterException: ... does not have an associated load balancer`,
+because Phase 6D's deliberate deletion of the HTTP listener left the target
+group's `LoadBalancerArns` empty, and ECS refuses any service update (not
+just a task-definition change) while that's true. This has no functional
+consequence: revision 2's image digest is byte-identical to the one revision
+1 already runs, so the live API container is already the correct, traceable
+build. Part B's HTTPS listener will restore the load-balancer association,
+at which point `update-service --task-definition know-your-lease-api:2`
+(already registered) applies normally.
+
+The `KnowYourLeaseDeployerPolicy` v3 update needed further compression on top
+of `v2`'s already-tight fit (6,140/6,144 bytes) to add the ACM permissions
+Part B needs. Two statement pairs that already shared identical
+`Effect`+`Resource` were merged (ECR management; the two `Resource:"*"`
+read-only statements) -- pure JSON-overhead reduction verified to grant
+exactly the same actions as before, not a scope change. `ecr:*`/`logs:*`
+wildcards were considered and rejected as unnecessary once the merges alone
+provided enough headroom. See `docs/aws-identity.md` for the full statement
+breakdown.

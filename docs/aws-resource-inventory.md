@@ -89,8 +89,9 @@ what its execution role already grants (image pull, log write, its one secret).
 
 | Resource type | Name | ARN/ID | Region | Purpose | Ongoing cost | Teardown command/note |
 | --- | --- | --- | --- | --- | --- | --- |
-| IAM policy version | `KnowYourLeaseDeployerPolicy` v2 | same policy ARN, `VersionId=v2` | global | Added ECR image-push, ECS cluster/task-def/run-task/service, CloudWatch Logs group management, ELBv2 management, and a scoped `iam:CreateServiceLinkedRole`; all 15 Phase 6C statements (including all 5 Deny guardrails) preserved byte-identical | No fixed charge | `aws iam delete-policy-version --policy-arn arn:aws:iam::297784246437:policy/KnowYourLeaseDeployerPolicy --version-id v2` then `set-default-policy-version --version-id v1`, once 6D resources are gone |
-| ECR image | `know-your-lease-backend` | tags `<sha>`, `<sha>-fix1`, `<sha>-fix2`; running digest `sha256:da415a7320f1324d98dfe1bf0934fbc2749f53f1f8c69f0f0da024dc2835a248` | `ca-central-1` | Production image; `<sha>` and `<sha>-fix1` are earlier same-session bootstrap-script iterations kept only because the repository is `IMMUTABLE` and nothing else references them | ~$0.10/GB-month for all tags combined (~450 MB total) | `aws ecr batch-delete-image --repository-name know-your-lease-backend --image-ids imageTag=<sha> imageTag=<sha>-fix1 imageTag=<sha>-fix2` |
+| IAM policy version | `KnowYourLeaseDeployerPolicy` v2 (superseded by v3, kept for history) | same policy ARN, `VersionId=v2` | global | Added ECR image-push, ECS cluster/task-def/run-task/service, CloudWatch Logs group management, ELBv2 management, and a scoped `iam:CreateServiceLinkedRole`; all 15 Phase 6C statements (including all 5 Deny guardrails) preserved byte-identical | No fixed charge | `aws iam delete-policy-version --policy-arn arn:aws:iam::297784246437:policy/KnowYourLeaseDeployerPolicy --version-id v2` (only after v3 is confirmed working; a policy needs at least one non-default version deletable, and AWS caps a policy at 5 versions total) |
+| IAM policy version | `KnowYourLeaseDeployerPolicy` v3 (current default) | same policy ARN, `VersionId=v3` | global | Phase 6E Part A: added `acm:RequestCertificate`/`DescribeCertificate`/`ListCertificates`/`DeleteCertificate`/`AddTagsToCertificate` (`Resource: "*"` -- ACM cert ARNs don't exist before request, and List is inherently account-wide). To fit the 6,144-byte managed-policy limit (v2 was already at 6,140), the two ECR statements were merged into one (same 22 actions, same single-repository ARN, zero scope change) and the two `Resource:"*"` read-only statements were merged into one (same 33 actions, zero scope change) -- both are structural dedup only, not a widening; all 5 Deny guardrails and the other 15 statements verified byte-identical to v2 before publishing. Final size: 6,124/6,144 bytes | No fixed charge | `aws iam set-default-policy-version --policy-arn arn:aws:iam::297784246437:policy/KnowYourLeaseDeployerPolicy --version-id v1` then delete v2 and v3, once all 6D/6E resources are gone |
+| ECR image | `know-your-lease-backend` | 4 tags on one digest `sha256:da415a7320f1324d98dfe1bf0934fbc2749f53f1f8c69f0f0da024dc2835a248`: `9340c4da42134f4e5fda1dab43aa20fb55e11cdc` (the committed Phase 6D HEAD -- the canonical tag), `1156875f1a662a0c2331dcc724738dc6467870f9-fix2`, plus two earlier-session `<sha>`/`<sha>-fix1` tags on a different digest | `ca-central-1` | Production image. Rebuilding from the committed `9340c4d` tree reproduced the **exact same digest** already running (`da415a73...`) -- byte-for-byte confirmation that Phase 6D's committed source matches what was deployed. The `-fix1`/`-fix2`/original-`<sha>` tags are earlier same-session bootstrap-script iterations kept only because the repository is `IMMUTABLE` | ~$0.10/GB-month for all tags combined (~450 MB total, two distinct digests) | `aws ecr batch-delete-image --repository-name know-your-lease-backend --image-ids imageTag=9340c4da42134f4e5fda1dab43aa20fb55e11cdc imageTag=1156875f1a662a0c2331dcc724738dc6467870f9-fix2 imageTag=1156875f1a662a0c2331dcc724738dc6467870f9 imageTag=1156875f1a662a0c2331dcc724738dc6467870f9-fix1` |
 | ECS cluster | `know-your-lease-prod` | `arn:aws:ecs:ca-central-1:297784246437:cluster/know-your-lease-prod` | `ca-central-1` | Fargate-only cluster; `containerInsights=disabled`; no EC2 capacity, no ECS Exec | No fixed charge (Fargate task-hours below are the real cost) | After both services and all task definitions are gone: `aws ecs delete-cluster --cluster know-your-lease-prod` |
 | CloudWatch log group | `/ecs/know-your-lease/api` | same | `ca-central-1` | API container stdout/stderr, 7-day retention | Usage-based, negligible at this volume | `aws logs delete-log-group --log-group-name /ecs/know-your-lease/api` |
 | CloudWatch log group | `/ecs/know-your-lease/worker` | same | `ca-central-1` | Worker container logs, 7-day retention | Usage-based, negligible | `aws logs delete-log-group --log-group-name /ecs/know-your-lease/worker` |
@@ -98,8 +99,8 @@ what its execution role already grants (image pull, log write, its one secret).
 | CloudWatch log group | `/ecs/know-your-lease/bootstrap` | same | `ca-central-1` | One-off DB bootstrap task logs, 7-day retention | Usage-based, negligible | `aws logs delete-log-group --log-group-name /ecs/know-your-lease/bootstrap` |
 | Secrets Manager secret | `know-your-lease/prod/database-url-app` | `arn:aws:secretsmanager:ca-central-1:297784246437:secret:know-your-lease/prod/database-url-app-FsTQ8V` | `ca-central-1` | `kyl_app` connection string (DML only, no DDL); readable by `kyl-api-execution` and `kyl-worker-execution` only | ~$0.40/month | `aws secretsmanager delete-secret --secret-id know-your-lease/prod/database-url-app --force-delete-without-recovery` |
 | Secrets Manager secret | `know-your-lease/prod/database-url-migrate` | `arn:aws:secretsmanager:ca-central-1:297784246437:secret:know-your-lease/prod/database-url-migrate-6odMAo` | `ca-central-1` | `kyl_migrate` connection string (schema owner); readable by `kyl-migration-execution` only | ~$0.40/month | `aws secretsmanager delete-secret --secret-id know-your-lease/prod/database-url-migrate --force-delete-without-recovery` |
-| ECS task definition | `know-your-lease-api` | family, revision 1 | `ca-central-1` | API container spec: execution `kyl-api-execution`, task `kyl-api-task`, port 8000 | No fixed charge | `aws ecs deregister-task-definition --task-definition know-your-lease-api:1` |
-| ECS task definition | `know-your-lease-worker` | family, revision 1 | `ca-central-1` | Worker container spec: execution `kyl-worker-execution`, task `kyl-worker-task`, no ports | No fixed charge | `aws ecs deregister-task-definition --task-definition know-your-lease-worker:1` |
+| ECS task definition | `know-your-lease-api` | family, revisions 1-2 (identical `image` digest; revision 2 exists only to carry the canonical `9340c4d` tag reference forward) | `ca-central-1` | API container spec: execution `kyl-api-execution`, task `kyl-api-task`, port 8000. **The running service is still on revision 1** -- see the known limitation below | No fixed charge | `aws ecs deregister-task-definition --task-definition know-your-lease-api:1` (and `:2`) |
+| ECS task definition | `know-your-lease-worker` | family, revisions 1-2 (identical `image` digest) | `ca-central-1` | Worker container spec: execution `kyl-worker-execution`, task `kyl-worker-task`, no ports. Service updated to revision 2 and confirmed stable | No fixed charge | `aws ecs deregister-task-definition --task-definition know-your-lease-worker:1` (and `:2`) |
 | ECS task definition | `know-your-lease-migration` | family, revision 1 | `ca-central-1` | One-off `alembic upgrade head`; execution `kyl-migration-execution`; **no task role** | No fixed charge | `aws ecs deregister-task-definition --task-definition know-your-lease-migration:1` |
 | ECS task definition | `know-your-lease-bootstrap` | family, revisions 1-3 | `ca-central-1` | One-off DB role bootstrap; revisions 1-2 used a now-deleted bootstrap execution/task role pair and failed (see Bootstrap notes below); revision 3 succeeded | No fixed charge | `aws ecs deregister-task-definition --task-definition know-your-lease-bootstrap:<1\|2\|3>` |
 | ECS service | `know-your-lease-api` | `arn:aws:ecs:ca-central-1:297784246437:service/know-your-lease-prod/know-your-lease-api` | `ca-central-1` | `desiredCount=1`, both public subnets, `api-sg`, registered to the ALB target group, circuit breaker + rollback enabled | Fargate task-hours (below) | `aws ecs update-service --cluster know-your-lease-prod --service know-your-lease-api --desired-count 0` then `aws ecs delete-service --cluster know-your-lease-prod --service know-your-lease-api --force` |
@@ -491,6 +492,52 @@ creation parameters:
 - `accountPlanType=FREE`, `accountPlanStatus=ACTIVE`, credits unchanged at
   $120.00, checked both before provisioning began and after every resource
   above was created.
+
+## Verified Phase 6E Part A state
+
+- `KnowYourLeaseDeployerPolicy` v3 is the default version. All 5 Deny
+  guardrails (Free-plan upgrade, Organizations, account mutation, new-IAM-user
+  escalation paths, self-lockout) re-verified `explicitDeny` after publishing.
+  The two structural merges (ECR statements; the two `Resource:"*"`
+  read-only statements) were verified to grant exactly the same actions as
+  before -- programmatically diffed against v2, not eyeballed. New ACM
+  actions verified `allowed`; an ACM action *not* granted
+  (`acm:ImportCertificate`) verified `implicitDeny` as a spot-check against
+  unintended privilege creep from the merges.
+- Rebuilding `linux/amd64` from the committed Git SHA (`9340c4d`, confirmed
+  clean tree before and after) reproduced digest
+  `sha256:da415a7320f1324d98dfe1bf0934fbc2749f53f1f8c69f0f0da024dc2835a248` --
+  **identical** to the digest already running since Phase 6D. This is a
+  direct, verified confirmation that the committed source matches the
+  deployed artifact; no drift existed to fix.
+- Worker service: updated to task-definition revision 2, `rolloutState:
+  COMPLETED`, `running=1/desired=1`, exactly one task ARN throughout (no
+  restart), log shows a clean "Ingestion worker started" with no errors.
+- **Known limitation, in scope and expected:** the API service could not be
+  updated to revision 2. `ecs:UpdateService` returned
+  `InvalidParameterException: The target group ... does not have an
+  associated load balancer`. Root cause, confirmed by
+  `describe-target-groups`: `LoadBalancerArns` is `[]` because Phase 6D
+  deliberately deleted the only listener that ever referenced this target
+  group, and ELB only reports a target group as associated with a load
+  balancer while a listener rule actively references it. **Any**
+  `update-service` call against this service -- not just a task-definition
+  change -- will fail until Part B creates a listener; that is out of this
+  session's scope by explicit instruction. Impact: none in practice, since
+  revision 2's image digest is byte-identical to revision 1's; the API
+  container already is the correct, traceable build. The API task itself was
+  confirmed still `RUNNING` continuously since its original Phase 6D start
+  time with zero restarts, and its last logged requests (`GET /health` → 200,
+  `GET /documents` → 401) are unchanged. Part B's listener creation will
+  naturally restore the load-balancer association, at which point
+  `update-service --task-definition know-your-lease-api:2` (already
+  registered) can be applied with a normal rolling deploy.
+- RDS `PubliclyAccessible=false`; S3 all four public-access-block flags
+  `true`. Neither was touched this session.
+- `accountPlanType=FREE`, `accountPlanStatus=ACTIVE`, credits `$117.25`
+  (down from `$120.00` at the end of Phase 6D, consistent with ~1 day of the
+  already-documented ~$2.51/day running burn -- not new spend from this
+  session's IAM/image-tag changes, which carry no cost of their own).
 
 ## Current list-price estimate
 

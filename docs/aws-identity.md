@@ -108,10 +108,10 @@ guardrail (see below). That one call mutated nothing.
 
 ### `KnowYourLeaseDeployerPolicy`: what it allows and explicitly denies
 
-Full policy: `aws iam get-policy-version --policy-arn arn:aws:iam::297784246437:policy/KnowYourLeaseDeployerPolicy --version-id v2`
-(current default; `v1` is the Phase 6C version, retained for history). Summary
-below covers `v1`'s statements first; the **Phase 6D additions** subsection
-covers what `v2` added on top.
+Full policy: `aws iam get-policy-version --policy-arn arn:aws:iam::297784246437:policy/KnowYourLeaseDeployerPolicy --version-id v3`
+(current default; `v1`/`v2` retained for history). Summary below covers `v1`'s
+statements first; **Phase 6D additions** covers what `v2` added, and **Phase
+6E Part A additions** covers what `v3` added/restructured on top of that.
 
 **Allowed**, scoped to this project's resources or to safe read-only actions:
 - Read-only account/cost checks: `sts:GetCallerIdentity`, `freetier:Get*`,
@@ -198,6 +198,45 @@ No `s3:*`, `sqs:*`, `secretsmanager:*`, `ec2:CreateNetworkInterface`, or
 `AdministratorAccess` was added. The deployer still cannot read any secret
 *value* (`secretsmanager:GetSecretValue` remains ungranted) and still cannot
 create a new IAM user, access key, or login profile.
+
+### Phase 6E Part A additions (`v3`)
+
+`v2` was already at 6,140 of the 6,144-byte managed-policy limit. Adding the
+ACM statement needed for Part B's certificate workflow required saving space
+first. Two **structural merges** were made -- each verified to grant exactly
+the same actions as before, programmatically diffed statement-by-statement
+against `v2` rather than eyeballed, with zero scope widening:
+
+- `EcrProjectRepository` (15 actions) and `EcrImagePush` (7 actions) merged
+  into one statement with the same 22 actions on the same single repository
+  ARN. Two statements sharing one resource were pure duplicate JSON overhead;
+  merging removed a redundant `Sid`/`Effect`/`Resource` wrapper, nothing else.
+- `ReadOnlyAccountAndCostChecks` (9 actions) and
+  `ReadOnlyInfrastructureVisibility` (24 actions) merged the same way (both
+  were already `Resource: "*"`) into a 33-action statement.
+
+This freed enough space (6,124/6,144 after adding ACM) without resorting to
+`ecr:*` or `logs:*` wildcards, which were considered and rejected: they would
+have granted a materially larger set of actions than the project actually
+uses, for a byte saving that the two zero-risk merges above already made
+unnecessary.
+
+Added on top, newly **allowed**:
+
+- `acm:RequestCertificate`, `acm:DescribeCertificate`, `acm:ListCertificates`,
+  `acm:DeleteCertificate`, `acm:AddTagsToCertificate` on `Resource: "*"` --
+  a certificate's ARN doesn't exist before `RequestCertificate` succeeds, and
+  `ListCertificates` is inherently account-wide, so neither supports
+  resource-level scoping.
+
+All 5 Deny statements and the 15 unrelated `v1`/`v2` statements were verified
+byte-identical to `v2` before publishing `v3`. Post-publish,
+`simulate-principal-policy` reconfirmed all 5 guardrails still
+`explicitDeny`, the new ACM actions `allowed`, an ACM action deliberately
+*not* granted (`acm:ImportCertificate`) still `implicitDeny`, and every
+previously-working permission (ECR push, ECS cluster/service, ELB listener
+creation, CloudWatch log group creation, `sts:GetCallerIdentity`, EC2
+describe, `iam:SimulatePrincipalPolicy`) still `allowed`.
 
 ### The temporary bootstrap identities (created and deleted within Phase 6D)
 
