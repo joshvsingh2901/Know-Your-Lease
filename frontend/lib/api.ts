@@ -56,11 +56,11 @@ export async function listDocuments(): Promise<UploadedDocument[]> {
       headers: await authHeaders(),
     });
   } catch {
-    throw new ApiError("Saved documents could not be loaded. Check that the backend is running.");
+    throw new ApiError("Your documents could not be loaded. Please try again.");
   }
   if (!response.ok) {
     reactToResponseStatus(response);
-    throw new ApiError(await getErrorMessage(response, "Saved documents could not be loaded."), response.status);
+    throw new ApiError(await getErrorMessage(response, "Your documents could not be loaded. Please try again."), response.status);
   }
   const body = (await response.json()) as { items: UploadedDocument[] };
   return body.items;

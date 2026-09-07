@@ -1,64 +1,254 @@
 import { AuthGate, SignOutButton } from "@/components/auth-gate";
+import { HeroIllustration } from "@/components/landing/hero-illustration";
+import { ProductDemo } from "@/components/landing/product-demo";
 import { LeaseUpload } from "@/components/lease-upload";
+import { landingFontVariables } from "@/lib/fonts";
 
 export default function Home() {
   return (
-    <main className="min-h-screen bg-[var(--paper)] text-[var(--ink)]">
-      <header className="border-b border-[var(--line)] bg-white/80">
-        <div className="mx-auto flex max-w-6xl items-center justify-between px-5 py-4 sm:px-8">
-          <a href="#main-content" className="flex items-center gap-3" aria-label="Know Your Lease home">
-            <span className="grid size-9 place-items-center rounded-lg bg-[var(--navy)] text-sm font-semibold text-white">
-              KYL
-            </span>
-            <span className="text-sm font-semibold tracking-[0.14em] text-[var(--navy)]">
-              KNOW YOUR LEASE
+    <main className={`landing ${landingFontVariables}`} style={{ minHeight: "100vh" }}>
+      <header
+        style={{
+          position: "sticky",
+          top: 0,
+          zIndex: 20,
+          background: "rgba(246,243,237,0.92)",
+          backdropFilter: "blur(8px)",
+          borderBottom: "1px solid var(--l-line)",
+        }}
+      >
+        <div
+          style={{
+            maxWidth: 1120,
+            margin: "0 auto",
+            padding: "0 24px",
+            height: 60,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            gap: 24,
+          }}
+        >
+          <a href="#top" style={{ display: "flex", alignItems: "center", gap: 10 }} aria-label="Know Your Lease home">
+            <span
+              aria-hidden="true"
+              style={{
+                width: 15,
+                height: 19,
+                border: "1.5px solid var(--l-ink)",
+                borderRadius: 1,
+                display: "block",
+                background: "var(--l-surface-alt)",
+              }}
+            />
+            <span style={{ fontFamily: "var(--font-serif-display)", fontSize: 20, letterSpacing: "-0.005em" }}>
+              Know Your Lease
             </span>
           </a>
-          <div className="hidden items-center gap-4 sm:flex">
-            <span className="text-sm text-[var(--muted)]">Private document workspace</span>
+          <nav style={{ display: "flex", alignItems: "center", gap: 26, fontSize: 14, color: "var(--l-text)" }}>
+            <a href="#demo" style={{ color: "var(--l-text)" }}>
+              How it works
+            </a>
             <SignOutButton />
-          </div>
+            <a
+              href="#get-started"
+              style={{
+                display: "inline-flex",
+                alignItems: "center",
+                height: 34,
+                padding: "0 16px",
+                border: "1px solid var(--l-ink)",
+                borderRadius: 2,
+                background: "var(--l-ink)",
+                color: "var(--l-surface)",
+                fontSize: 14,
+                fontWeight: 500,
+              }}
+            >
+              Get started
+            </a>
+          </nav>
         </div>
       </header>
 
-      <section id="main-content" className="mx-auto max-w-6xl px-5 pb-20 pt-14 sm:px-8 sm:pt-20">
-        <div className="mx-auto max-w-3xl text-center">
-          <p className="mb-4 text-xs font-semibold uppercase tracking-[0.2em] text-[var(--accent)]">
-            Lease clarity starts here
-          </p>
-          <h1 className="text-balance font-serif text-4xl leading-tight tracking-[-0.025em] text-[var(--navy)] sm:text-6xl">
-            Understand the agreement before it becomes a question.
-          </h1>
-          <p className="mx-auto mt-6 max-w-2xl text-pretty text-base leading-7 text-[var(--muted)] sm:text-lg">
-            Upload your lease and ask questions with answers linked directly to the relevant clauses.
-          </p>
-        </div>
-
-        <AuthGate>
-          <LeaseUpload />
-
-          <div className="mx-auto mt-8 grid max-w-3xl gap-3 sm:grid-cols-3">
-            {[
-              ["01", "Upload", "Add your lease as a PDF."],
-              ["02", "Review", "We’ll prepare each clause."],
-              ["03", "Ask", "Get grounded answers with sources."],
-            ].map(([number, title, copy]) => (
-              <div key={number} className="border-t border-[var(--line)] px-1 pt-4">
-                <div className="flex items-baseline gap-3">
-                  <span className="font-mono text-xs text-[var(--accent)]">{number}</span>
-                  <h2 className="font-semibold text-[var(--navy)]">{title}</h2>
-                </div>
-                <p className="mt-1 pl-8 text-sm leading-6 text-[var(--muted)]">{copy}</p>
-              </div>
-            ))}
+      <section id="top" style={{ maxWidth: 1120, margin: "0 auto", padding: "72px 24px 64px" }}>
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 56, alignItems: "center" }}>
+          <div style={{ flex: "1 1 400px", minWidth: 0 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 20 }}>
+              <span style={{ width: 18, height: 1, background: "var(--l-accent)" }} />
+              <span
+                style={{
+                  fontFamily: "var(--font-mono-editorial)",
+                  fontSize: 12,
+                  letterSpacing: "0.02em",
+                  color: "var(--l-accent)",
+                }}
+              >
+                For first-time renters
+              </span>
+            </div>
+            <h1
+              style={{
+                fontFamily: "var(--font-serif-display)",
+                fontWeight: 400,
+                fontSize: "clamp(42px, 5.6vw, 68px)",
+                lineHeight: 1.02,
+                letterSpacing: "-0.012em",
+                margin: 0,
+              }}
+            >
+              Understand your lease
+              <br />
+              <em style={{ fontStyle: "italic", color: "var(--l-ink-soft)" }}>before you sign.</em>
+            </h1>
+            <p style={{ margin: "24px 0 0", maxWidth: "46ch", fontSize: 17, lineHeight: 1.55, color: "var(--l-text)" }}>
+              Ask questions about your rental agreement and find the exact clauses behind the answers.
+            </p>
+            <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 12, marginTop: 34 }}>
+              <a
+                href="#get-started"
+                style={{
+                  display: "inline-flex",
+                  alignItems: "center",
+                  height: 44,
+                  padding: "0 22px",
+                  background: "var(--l-ink)",
+                  color: "var(--l-surface)",
+                  border: "1px solid var(--l-ink)",
+                  borderRadius: 2,
+                  fontSize: 15,
+                  fontWeight: 500,
+                }}
+              >
+                Get started
+              </a>
+              <a
+                href="#demo"
+                style={{
+                  display: "inline-flex",
+                  alignItems: "center",
+                  height: 44,
+                  padding: "0 20px",
+                  border: "1px solid var(--l-line-strong)",
+                  borderRadius: 2,
+                  background: "transparent",
+                  color: "var(--l-ink)",
+                  fontSize: 15,
+                }}
+              >
+                See how it works
+              </a>
+            </div>
           </div>
-        </AuthGate>
+          <HeroIllustration />
+        </div>
       </section>
 
-      <footer className="border-t border-[var(--line)]">
-        <div className="mx-auto flex max-w-6xl flex-col gap-2 px-5 py-6 text-xs text-[var(--muted)] sm:flex-row sm:items-center sm:justify-between sm:px-8">
-          <span>Know Your Lease</span>
-          <span>Document guidance, grounded in your agreement.</span>
+      <section id="get-started" style={{ borderTop: "1px solid var(--l-line)", background: "var(--l-paper)" }}>
+        <div style={{ maxWidth: 1120, margin: "0 auto", padding: "56px 24px 64px" }}>
+          <div style={{ maxWidth: "60ch", marginBottom: 8 }}>
+            <div style={{ fontFamily: "var(--font-mono-editorial)", fontSize: 11.5, color: "var(--l-accent)", marginBottom: 9 }}>
+              Get started
+            </div>
+            <h2
+              style={{
+                fontFamily: "var(--font-serif-display)",
+                fontWeight: 400,
+                fontSize: "clamp(26px, 3vw, 34px)",
+                lineHeight: 1.1,
+                letterSpacing: "-0.01em",
+                margin: 0,
+              }}
+            >
+              Add your own lease.
+            </h2>
+          </div>
+          <AuthGate>
+            <LeaseUpload />
+          </AuthGate>
+        </div>
+      </section>
+
+      <ProductDemo />
+
+      <section id="close" style={{ borderTop: "1px solid var(--l-line)" }}>
+        <div
+          style={{
+            maxWidth: 1120,
+            margin: "0 auto",
+            padding: "76px 24px 84px",
+            display: "flex",
+            flexWrap: "wrap",
+            gap: 40,
+            alignItems: "flex-end",
+          }}
+        >
+          <div style={{ flex: "1 1 420px", minWidth: 0 }}>
+            <h2
+              style={{
+                fontFamily: "var(--font-serif-display)",
+                fontWeight: 400,
+                fontSize: "clamp(30px, 3.6vw, 42px)",
+                lineHeight: 1.1,
+                letterSpacing: "-0.01em",
+                margin: 0,
+                maxWidth: "22ch",
+              }}
+            >
+              Your lease stays where you left it, and so does the <em style={{ fontStyle: "italic" }}>evidence</em>.
+            </h2>
+            <p style={{ margin: "18px 0 0", maxWidth: "52ch", fontSize: 16, lineHeight: 1.55, color: "var(--l-text)" }}>
+              Come back to any document, re-read the clause behind an answer, and check the source yourself.
+            </p>
+          </div>
+          <a
+            href="#get-started"
+            style={{
+              display: "inline-flex",
+              alignItems: "center",
+              height: 46,
+              padding: "0 24px",
+              background: "var(--l-ink)",
+              color: "var(--l-surface)",
+              borderRadius: 2,
+              fontSize: 15,
+              fontWeight: 500,
+              whiteSpace: "nowrap",
+            }}
+          >
+            Get started
+          </a>
+        </div>
+      </section>
+
+      <footer style={{ borderTop: "1px solid var(--l-line)", background: "var(--l-paper-alt)" }}>
+        <div
+          style={{
+            maxWidth: 1120,
+            margin: "0 auto",
+            padding: "28px 24px 40px",
+            display: "flex",
+            flexWrap: "wrap",
+            gap: 20,
+            alignItems: "baseline",
+            justifyContent: "space-between",
+          }}
+        >
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 22, fontSize: 13.5, color: "var(--l-text)" }}>
+            <span style={{ fontFamily: "var(--font-serif-display)", fontSize: 17, color: "var(--l-ink)" }}>Know Your Lease</span>
+            <a href="#demo" style={{ color: "var(--l-text)" }}>
+              How it works
+            </a>
+            <a href="#top" style={{ color: "var(--l-text)" }}>
+              Privacy
+            </a>
+            <a href="#top" style={{ color: "var(--l-text)" }}>
+              Contact
+            </a>
+          </div>
+          <p style={{ margin: 0, fontFamily: "var(--font-mono-editorial)", fontSize: 11.5, color: "var(--l-muted)", maxWidth: "44ch", lineHeight: 1.6 }}>
+            Not legal advice. Know Your Lease helps you read your own document; it does not review, negotiate, or advise on it.
+          </p>
         </div>
       </footer>
     </main>

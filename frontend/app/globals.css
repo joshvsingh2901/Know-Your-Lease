@@ -54,3 +54,60 @@ textarea:focus-visible,
   border-radius: 2px;
   box-shadow: 0 0 0 1px rgba(154, 86, 59, 0.22);
 }
+
+.landing {
+  --l-paper: #f6f3ed;
+  --l-paper-alt: #f1ede4;
+  --l-surface: #fcfaf6;
+  --l-surface-alt: #fffdf9;
+  --l-ink: #1b1a17;
+  --l-ink-soft: #2a2721;
+  --l-text: #4a453d;
+  --l-muted: #6e675c;
+  --l-faint: #8b8377;
+  --l-line: #e3ddd2;
+  --l-line-strong: #dad3c6;
+  --l-accent: #9a5b3c;
+  background: var(--l-paper);
+  color: var(--l-ink);
+  font-family: var(--font-sans-editorial), "IBM Plex Sans", system-ui, sans-serif;
+}
+
+.landing a {
+  color: var(--l-ink);
+  text-decoration: none;
+}
+
+.landing a:hover {
+  color: var(--l-accent);
+}
+
+@keyframes kylFade {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes kylSlide {
+  0% {
+    transform: translateX(-100%);
+  }
+  100% {
+    transform: translateX(420%);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .landing,
+  .landing * {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+    scroll-behavior: auto !important;
+  }
+}
