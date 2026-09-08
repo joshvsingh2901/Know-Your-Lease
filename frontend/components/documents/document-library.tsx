@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { ChangeEvent, useEffect, useRef, useState } from "react";
 
 import { SignOutButton } from "@/components/auth-gate";
@@ -8,6 +9,8 @@ import { usePrefersReducedMotion } from "@/components/landing/hooks";
 import { ApiError, listDocuments, uploadDocument, getDocument } from "@/lib/api";
 import { saveActiveDocumentId, shouldPollDocumentStatus } from "@/lib/active-document";
 import type { DocumentStatus, UploadedDocument } from "@/types/document";
+
+import { shouldEnterWorkspace } from "./upload-navigation";
 
 const MAX_FILE_SIZE = 20 * 1024 * 1024;
 const ACCENT = "var(--l-accent)";
@@ -62,12 +65,14 @@ type LibraryState =
   | { kind: "loaded"; documents: UploadedDocument[] };
 
 export function DocumentLibrary() {
+  const router = useRouter();
   const reducedMotion = usePrefersReducedMotion();
   const inputRef = useRef<HTMLInputElement>(null);
   const pollingIds = useRef<Set<string>>(new Set());
   const pollFailures = useRef<Map<string, number>>(new Map());
   const timeouts = useRef<ReturnType<typeof setTimeout>[]>([]);
   const loadToken = useRef(0);
+  const uploadedDocumentId = useRef<string | null>(null);
 
   const [library, setLibrary] = useState<LibraryState>({ kind: "loading" });
   const [uploadError, setUploadError] = useState<string | null>(null);
@@ -117,10 +122,15 @@ export function DocumentLibrary() {
             ? { kind: "loaded", documents: current.documents.map((doc) => (doc.id === documentId ? latest : doc)) }
             : current,
         );
-        if (shouldPollDocumentStatus(latest.status)) {
+        const enterWorkspace = shouldEnterWorkspace(uploadedDocumentId.current, latest.id, latest.status);
+        if (shouldPollDocumentStatus(latest.status) && !enterWorkspace) {
           schedulePoll(documentId, POLL_DELAY_MS);
         } else {
           pollingIds.current.delete(documentId);
+        }
+        if (enterWorkspace) {
+          uploadedDocumentId.current = null;
+          router.push(`/documents/${latest.id}`);
         }
       } catch {
         const failures = (pollFailures.current.get(documentId) ?? 0) + 1;
@@ -167,11 +177,16 @@ export function DocumentLibrary() {
     try {
       const uploaded = await uploadDocument(file);
       if (typeof window !== "undefined") saveActiveDocumentId(window.localStorage, uploaded.id);
+      uploadedDocumentId.current = uploaded.id;
       setLibrary((current) =>
         current.kind === "loaded"
           ? { kind: "loaded", documents: [uploaded, ...current.documents] }
           : { kind: "loaded", documents: [uploaded] },
       );
+      if (shouldEnterWorkspace(uploadedDocumentId.current, uploaded.id, uploaded.status)) {
+        uploadedDocumentId.current = null;
+        router.push(`/documents/${uploaded.id}`);
+      }
     } catch (uploadCaughtError) {
       setUploadError(
         uploadCaughtError instanceof ApiError ? uploadCaughtError.message : "Your lease could not be uploaded. Please try again.",

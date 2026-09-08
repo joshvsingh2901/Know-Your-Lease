@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 
-import { handleAuthCallback } from "@/lib/auth";
+import { consumeReturnTo, handleAuthCallback } from "@/lib/auth";
 
 export default function AuthCallbackPage() {
   const router = useRouter();
@@ -13,7 +13,7 @@ export default function AuthCallbackPage() {
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     handleAuthCallback(params)
-      .then(() => router.replace("/"))
+      .then(() => router.replace(consumeReturnTo()))
       .catch((callbackError: unknown) => {
         setError(
           callbackError instanceof Error

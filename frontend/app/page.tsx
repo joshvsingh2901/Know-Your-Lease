@@ -1,7 +1,8 @@
-import { AuthGate, SignOutButton } from "@/components/auth-gate";
+import Link from "next/link";
+
+import { SignOutButton } from "@/components/auth-gate";
 import { HeroIllustration } from "@/components/landing/hero-illustration";
 import { ProductDemo } from "@/components/landing/product-demo";
-import { LeaseUpload } from "@/components/lease-upload";
 import { landingFontVariables } from "@/lib/fonts";
 
 export default function Home() {
@@ -49,9 +50,12 @@ export default function Home() {
             <a href="#demo" style={{ color: "var(--l-text)" }}>
               How it works
             </a>
+            <Link href="/documents" style={{ color: "var(--l-text)" }}>
+              Documents
+            </Link>
             <SignOutButton />
-            <a
-              href="#get-started"
+            <Link
+              href="/documents"
               style={{
                 display: "inline-flex",
                 alignItems: "center",
@@ -66,7 +70,7 @@ export default function Home() {
               }}
             >
               Get started
-            </a>
+            </Link>
           </nav>
         </div>
       </header>
@@ -105,8 +109,8 @@ export default function Home() {
               Ask questions about your rental agreement and find the exact clauses behind the answers.
             </p>
             <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 12, marginTop: 34 }}>
-              <a
-                href="#get-started"
+              <Link
+                href="/documents"
                 style={{
                   display: "inline-flex",
                   alignItems: "center",
@@ -121,7 +125,7 @@ export default function Home() {
                 }}
               >
                 Get started
-              </a>
+              </Link>
               <a
                 href="#demo"
                 style={{
@@ -141,31 +145,6 @@ export default function Home() {
             </div>
           </div>
           <HeroIllustration />
-        </div>
-      </section>
-
-      <section id="get-started" style={{ borderTop: "1px solid var(--l-line)", background: "var(--l-paper)" }}>
-        <div style={{ maxWidth: 1120, margin: "0 auto", padding: "56px 24px 64px" }}>
-          <div style={{ maxWidth: "60ch", marginBottom: 8 }}>
-            <div style={{ fontFamily: "var(--font-mono-editorial)", fontSize: 11.5, color: "var(--l-accent)", marginBottom: 9 }}>
-              Get started
-            </div>
-            <h2
-              style={{
-                fontFamily: "var(--font-serif-display)",
-                fontWeight: 400,
-                fontSize: "clamp(26px, 3vw, 34px)",
-                lineHeight: 1.1,
-                letterSpacing: "-0.01em",
-                margin: 0,
-              }}
-            >
-              Add your own lease.
-            </h2>
-          </div>
-          <AuthGate>
-            <LeaseUpload />
-          </AuthGate>
         </div>
       </section>
 
@@ -201,8 +180,8 @@ export default function Home() {
               Come back to any document, re-read the clause behind an answer, and check the source yourself.
             </p>
           </div>
-          <a
-            href="#get-started"
+          <Link
+            href="/documents"
             style={{
               display: "inline-flex",
               alignItems: "center",
@@ -217,7 +196,7 @@ export default function Home() {
             }}
           >
             Get started
-          </a>
+          </Link>
         </div>
       </section>
 
@@ -239,6 +218,9 @@ export default function Home() {
             <a href="#demo" style={{ color: "var(--l-text)" }}>
               How it works
             </a>
+            <Link href="/documents" style={{ color: "var(--l-text)" }}>
+              Documents
+            </Link>
             <a href="#top" style={{ color: "var(--l-text)" }}>
               Privacy
             </a>

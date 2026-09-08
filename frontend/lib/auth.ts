@@ -35,7 +35,38 @@ const STORAGE_KEYS = {
 } as const;
 
 const PKCE_VERIFIER_KEY = "know-your-lease.auth.pkce-verifier";
+const RETURN_TO_KEY = "know-your-lease.auth.return-to";
 const EXPIRY_LEEWAY_MS = 30_000;
+
+interface ReturnToWriter {
+  setItem(key: string, value: string): void;
+}
+
+interface ReturnToReader {
+  getItem(key: string): string | null;
+  removeItem(key: string): void;
+}
+
+/** Remembers the page the user was on before being sent to the Cognito Hosted UI, so
+ * they land back where they started (e.g. /documents) rather than always on "/". Only
+ * an in-app path is ever trusted back -- anything else (or nothing stored) falls back
+ * to "/". */
+export function writeReturnTo(storage: ReturnToWriter, path: string): void {
+  storage.setItem(RETURN_TO_KEY, path);
+}
+
+export function readReturnTo(storage: ReturnToReader): string {
+  const value = storage.getItem(RETURN_TO_KEY);
+  storage.removeItem(RETURN_TO_KEY);
+  return value && value.startsWith("/") ? value : "/";
+}
+
+/** Convenience wrapper over readReturnTo for the callback page, bound to the real
+ * browser sessionStorage. */
+export function consumeReturnTo(): string {
+  if (typeof window === "undefined") return "/";
+  return readReturnTo(window.sessionStorage);
+}
 
 function base64UrlEncode(bytes: Uint8Array): string {
   let binary = "";
@@ -184,6 +215,7 @@ async function redirectToHostedUi(path: string): Promise<void> {
   const verifier = randomVerifier();
   const challenge = base64UrlEncode(await sha256(verifier));
   window.sessionStorage.setItem(PKCE_VERIFIER_KEY, verifier);
+  writeReturnTo(window.sessionStorage, window.location.pathname + window.location.search);
 
   const url = buildHostedUiUrl(config, path, {
     response_type: "code",
