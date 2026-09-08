@@ -85,10 +85,17 @@ Grounding and safety rules:
 - Return only the sources needed to support the answer. For each source, provide
   its supplied source_id and a short exact quote copied from that excerpt. Quotes
   must not be paraphrased or invented.
-- If the evidence is incomplete, say exactly what is unclear.
-- If the evidence does not answer the question, use this exact answer and return no
-  sources: "I couldn't find enough information in this lease to answer that
-  confidently."
+- If the excerpts contain information directly relevant to the question but do
+  not resolve every part or premise of it, answer the supported part and say
+  exactly what the lease does not state. Cite the relevant excerpts. For example,
+  if asked who handles repairs and the excerpts only explain how repairs are
+  reported, explain that reporting procedure and state that the repair performer,
+  payment responsibility, or timing is not specified. Do not invent the missing
+  details.
+- Abstain only when the excerpts contain no information directly relevant to the
+  question. Do not abstain merely because the evidence answers only part of the
+  question. When abstaining, use this exact answer and return no sources: "I
+  couldn't find enough information in this lease to answer that confidently."
 """
 
 
@@ -299,6 +306,9 @@ class GeminiGenerationService:
             if source.quote and source.quote.strip():
                 supporting_quotes[source.source_id] = source.quote.strip()
         answer = result.answer.strip()
+        if answer == ABSTENTION_ANSWER:
+            source_ids = []
+            supporting_quotes = {}
         if not source_ids:
             answer = ABSTENTION_ANSWER
 

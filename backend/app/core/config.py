@@ -62,7 +62,7 @@ class Settings(BaseSettings):
     gemini_thinking_level: str = "low"
     gemini_max_retries: int = 1
     gemini_retry_base_seconds: float = 2.0
-    answer_cache_version: str = Field(default="v1", min_length=1, max_length=64)
+    answer_cache_version: str = Field(default="v2", min_length=1, max_length=64)
 
     model_config = SettingsConfigDict(
         env_file=BACKEND_DIR / ".env",

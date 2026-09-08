@@ -94,6 +94,7 @@ def _result(
     chunk_index: int = 17,
     text: str = "The tenant may keep pets, subject to the conditions in this lease.",
     score: float = 0.91,
+    section_title: str | None = "Pets",
 ) -> RetrievalResult:
     return RetrievalResult(
         chunk_id=uuid.uuid4(),
@@ -103,7 +104,7 @@ def _result(
         text=text,
         score=score,
         distance=1.0 - score,
-        section_title="Pets",
+        section_title=section_title,
         paragraph_index=2,
         token_count=14,
     )
@@ -180,6 +181,75 @@ def test_ready_document_returns_grounded_answer_and_backend_citations(
     assert generated_question == "Can I have pets?"
     assert [item.source_id for item in evidence] == ["SOURCE_1"]
     assert all(item.text != foreign_result.text for item in evidence)
+
+
+def test_repairs_partial_answer_returns_reporting_procedure_and_page_citation(
+    client: TestClient,
+    db_session: Session,
+) -> None:
+    document = _document(db_session, DocumentStatus.READY)
+    repairs_text = (
+        "Urgent repairs involving active water leaks must be reported immediately. "
+        "The landlord will provide an emergency contact number for after-hours "
+        "reports. Routine maintenance requests must be submitted through the "
+        "tenant portal."
+    )
+    repairs_result = _result(
+        document.id,
+        page_number=3,
+        chunk_index=2,
+        text=repairs_text,
+        score=0.85,
+        section_title="Repairs and emergencies",
+    )
+    supported_answer = (
+        "The lease does not identify who performs or pays for repairs. Active "
+        "water leaks must be reported immediately using the landlord-provided "
+        "after-hours contact, and routine maintenance requests go through the "
+        "tenant portal."
+    )
+    _, _, _, generation = _override_question_service(
+        results=[repairs_result],
+        generation_result=GroundedGenerationResult(
+            answer=supported_answer,
+            source_ids=["SOURCE_1"],
+            supporting_quotes={
+                "SOURCE_1": (
+                    "Routine maintenance requests must be submitted through the "
+                    "tenant portal."
+                )
+            },
+        ),
+    )
+
+    response = client.post(
+        f"/documents/{document.id}/questions",
+        json={"question": "Who handles repairs?"},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["answer"] == supported_answer
+    assert payload["answer"] != (
+        "I couldn't find enough information in this lease to answer that confidently."
+    )
+    assert "pays for repairs" in payload["answer"]
+    assert "deadline" not in payload["answer"]
+    assert payload["citations"] == [
+        {
+            "chunk_id": str(repairs_result.chunk_id),
+            "page_number": 3,
+            "section_title": "Repairs and emergencies",
+            "snippet": (
+                "Routine maintenance requests must be submitted through the "
+                "tenant portal."
+            ),
+            "score": pytest.approx(0.85),
+        }
+    ]
+    generated_question, evidence = generation.calls[0]
+    assert generated_question == "Who handles repairs?"
+    assert [item.text for item in evidence] == [repairs_text]
 
 
 @pytest.mark.parametrize(
