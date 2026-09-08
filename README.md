@@ -252,7 +252,7 @@ for the job design, migration policy, local commands, and branch-protection step
 - SQS remains at-least-once: the queue and DLQ are provisioned, but automated replay, visibility heartbeats, and cross-process provider rate coordination remain operational work
 - No re-ingestion endpoint or version-bump producer: every document is created at ingestion version 1, and the version/attempt machinery that guards duplicate/stale delivery has no caller that requests a later version yet
 - Single-process provider rate coordination
-- The Phase 6B network/data plane, Phase 6C identity/artifacts/secrets, Phase 6D ECS deployment, and Phase 6E HTTPS/Vercel deployment exist temporarily; the unused TCP/80 ALB security-group rule still needs narrowly authorized removal; RDS backup retention is limited to one day by the account's Free plan
+- The Phase 6B network/data plane, Phase 6C identity/artifacts/secrets, Phase 6D ECS deployment, and Phase 6E HTTPS/Vercel deployment exist temporarily; RDS backup retention is limited to one day by the account's Free plan
 - No OCR, malware scanning, or encrypted retention workflow
 - No calibrated retrieval threshold, reranker, or hybrid lexical retrieval
 - No chat history or follow-up question rewriting

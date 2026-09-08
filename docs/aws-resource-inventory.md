@@ -15,7 +15,7 @@ secret material here.
 | Environment tag | `Environment=production` |
 | Temporary tag | `TemporaryDeployment=true` |
 | Intended lifetime | Approximately three days for portfolio validation |
-| Provisioning status | Phase 6E HTTPS/Vercel integration and authenticated synthetic-PDF validation live; TCP/80 security-group cleanup and Vercel GitHub App linkage remain |
+| Provisioning status | Phase 6E HTTPS/Vercel integration and authenticated synthetic-PDF validation live; TCP/80 security-group cleanup complete (see "TCP/80 security-group cleanup verified" below); Vercel GitHub App linkage remains |
 | Routine CLI identity | `arn:aws:iam::297784246437:user/kyl-deployer` (profile `kyl-deploy`), as of Phase 6C -- see [aws-identity.md](aws-identity.md) |
 
 ## Live account constraints and deviations
@@ -56,7 +56,7 @@ Resource rows were added immediately after each successful create operation.
 | Public route table | `know-your-lease-prod-public-rt` | `rtb-0f006aa35bfda99ca` | `ca-central-1` | Public subnets via associations `rtbassoc-0943720ce681d77d8`, `rtbassoc-097cd2cb4658c7fbc`; IGW and S3 endpoint routes | No fixed charge | Disassociate both association IDs, then `aws ec2 delete-route-table --region ca-central-1 --route-table-id rtb-0f006aa35bfda99ca` |
 | DB route table | `know-your-lease-prod-db-rt` | `rtb-01443693daaf9476c` | `ca-central-1` | Isolated DB subnets via `rtbassoc-08e63943e5300e939`, `rtbassoc-03317c618b124ac53`; local route only | No fixed charge | Disassociate both association IDs, then `aws ec2 delete-route-table --region ca-central-1 --route-table-id rtb-01443693daaf9476c` |
 | S3 Gateway endpoint | `know-your-lease-prod-s3-endpoint` | `vpce-0cd817d62ca77828a` | `ca-central-1` | Private S3 route on `rtb-0f006aa35bfda99ca` | No hourly charge | `aws ec2 delete-vpc-endpoints --region ca-central-1 --vpc-endpoint-ids vpce-0cd817d62ca77828a` |
-| Security group | `know-your-lease-prod-alb-sg` | `sg-07d87eca20e784665` | `ca-central-1` | Future ALB ingress on 80/443; egress only to API port 8000 | No fixed charge | Remove references, then `aws ec2 delete-security-group --region ca-central-1 --group-id sg-07d87eca20e784665` |
+| Security group | `know-your-lease-prod-alb-sg` | `sg-07d87eca20e784665` | `ca-central-1` | ALB ingress on 443 only (public TCP/80 rule manually removed 2026-09-08); egress only to API port 8000 | No fixed charge | Remove references, then `aws ec2 delete-security-group --region ca-central-1 --group-id sg-07d87eca20e784665` |
 | Security group | `know-your-lease-prod-api-sg` | `sg-0a522d046f50f1648` | `ca-central-1` | API ingress only from ALB; HTTPS, DNS, and DB egress | No fixed charge | Remove references, then `aws ec2 delete-security-group --region ca-central-1 --group-id sg-0a522d046f50f1648` |
 | Security group | `know-your-lease-prod-worker-sg` | `sg-07296ff1077ef4e27` | `ca-central-1` | No ingress; HTTPS, DNS, and DB egress | No fixed charge | Remove references, then `aws ec2 delete-security-group --region ca-central-1 --group-id sg-07296ff1077ef4e27` |
 | Security group | `know-your-lease-prod-migration-sg` | `sg-0c72374cad38edac2` | `ca-central-1` | No ingress; HTTPS, DNS, and DB egress | No fixed charge | Remove references, then `aws ec2 delete-security-group --region ca-central-1 --group-id sg-0c72374cad38edac2` |
@@ -575,13 +575,43 @@ creation parameters:
   denied because `kyl-deployer` lacks `ec2:RevokeSecurityGroupIngress`. The
   minimum additional grant is that one action on
   `arn:aws:ec2:ca-central-1:297784246437:security-group/sg-07d87eca20e784665`;
-  no broad EC2 administration is required.
+  no broad EC2 administration is required. (Resolved 2026-09-08 -- see
+  "TCP/80 security-group cleanup verified" below.)
 - Vercel automatic Git deployments remain pending because its GitHub App does
   not yet have access to `joshvsingh2901/Know-Your-Lease`. The successful
   production build was deployed with the Vercel CLI from the local `main`
   checkout.
 - The account remained `FREE` / `ACTIVE`; no paid Vercel features or AWS plan
   upgrade were enabled.
+
+## TCP/80 security-group cleanup verified
+
+The user removed the ALB security group's unused public TCP/80 ingress rule
+directly via the AWS Console on 2026-09-08, since `kyl-deployer` was never
+granted `ec2:RevokeSecurityGroupIngress` (least-privilege by design; the
+deployer's only EC2 grant is `ec2:Describe*`, confirmed against
+`deploy/iam/deployer-policy-v2.json`, and it cannot read its own IAM
+attachments either). No IAM policy was changed to perform the removal.
+
+Post-change verification with `kyl-deploy`:
+
+- `aws ec2 describe-security-groups` on `sg-07d87eca20e784665` shows exactly
+  one ingress rule -- TCP/443 from `0.0.0.0/0` ("HTTPS"); the TCP/80 rule is
+  gone.
+- The ALB (`know-your-lease-prod`) still has exactly one listener,
+  443/HTTPS -> forward; a plain HTTP request to `api.joshveer.ca` on port 80
+  now fails to connect (no listener, no open port) rather than returning any
+  response.
+- `https://api.joshveer.ca/health` returns `200 {"status":"ok"}`.
+- The ALB target group's one target is `healthy`.
+- Both `know-your-lease-api` (task definition revision 4) and
+  `know-your-lease-worker` (revision 2) remain `ACTIVE` with rollout
+  `COMPLETED`, one running task each, unchanged from before the cleanup.
+- AWS Free Tier usage API responds normally; `kyl-deploy` still lacks
+  `budgets:ViewBudget` and `support:DescribeServices`, so the account's
+  billing/support plan could not be directly re-confirmed as `FREE` / `ACTIVE`
+  through this credential (it was last confirmed via root during Phase 6B/6C
+  provisioning -- see above).
 
 ## Current list-price estimate
 

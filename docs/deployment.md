@@ -88,9 +88,11 @@ origin CORS, rejection of an unrelated origin, a `401` for unauthenticated
 upload/rendering of a synthetic PDF over HTTPS.
 
 Authorize the Vercel GitHub App for this repository if automatic Git deployments
-are desired. The ALB security group also still contains an unused public TCP/80
-rule; no HTTP listener exists, and `kyl-deployer` lacks the narrowly required
-`ec2:RevokeSecurityGroupIngress` permission to remove it.
+are desired. The ALB security group's unused public TCP/80 rule was removed
+manually via the AWS Console on 2026-09-08 (`kyl-deployer` still lacks
+`ec2:RevokeSecurityGroupIngress` and did not perform the removal); only TCP/443
+ingress remains, confirmed by a post-change connection failure on port 80 and
+continued healthy HTTPS traffic, ALB target health, and ECS service stability.
 
 ## Remaining manual deployment actions
 
@@ -102,24 +104,11 @@ root:
 npx --yes vercel@latest git connect https://github.com/joshvsingh2901/Know-Your-Lease.git
 ```
 
-To remove the unused TCP/80 rule without broad EC2 administration, an authorized
-non-root IAM administrator can temporarily grant only this statement to the
-deployment identity:
-
-```json
-{
-  "Effect": "Allow",
-  "Action": "ec2:RevokeSecurityGroupIngress",
-  "Resource": "arn:aws:ec2:ca-central-1:297784246437:security-group/sg-07d87eca20e784665"
-}
-```
-
-Then run the exact revoke and remove the temporary grant:
-
-```bash
-aws ec2 revoke-security-group-ingress \
-  --group-id sg-07d87eca20e784665 \
-  --ip-permissions '[{"IpProtocol":"tcp","FromPort":80,"ToPort":80,"IpRanges":[{"CidrIp":"0.0.0.0/0","Description":"HTTP-redirect-only"}]}]' \
-  --profile kyl-deploy \
-  --region ca-central-1
-```
+The unused TCP/80 rule has been removed. It required broad-enough access that
+`kyl-deployer` was not granted the narrow `ec2:RevokeSecurityGroupIngress`
+statement for this; instead an account administrator removed the rule directly
+via the AWS Console on 2026-09-08. Post-change verification with `kyl-deploy`
+confirmed the security group now allows only TCP/443, `https://api.joshveer.ca/health`
+still returns `200`, the ALB target group remains `healthy`, and both the
+`know-your-lease-api` and `know-your-lease-worker` ECS services remain stable
+on their existing task definitions.
